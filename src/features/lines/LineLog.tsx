@@ -1,0 +1,144 @@
+import { ListMusic, Pencil, Play, Trash2 } from 'lucide-react';
+import type { Group, VocalLine } from '../../domain/schema';
+import { lineDuration } from '../../domain/lineDistribution';
+import { formatClock } from '../../lib/time';
+
+interface LineLogProps {
+  group: Group;
+  lines: VocalLine[];
+  selectedLineId: string | null;
+  editingLineId: string | null;
+  onSelect: (lineId: string) => void;
+  onEdit: (line: VocalLine) => void;
+  onDelete: (lineId: string) => void;
+  onSeek: (time: number) => void;
+}
+
+export function LineLog({
+  group,
+  lines,
+  selectedLineId,
+  editingLineId,
+  onSelect,
+  onEdit,
+  onDelete,
+  onSeek,
+}: LineLogProps) {
+  const memberById = new Map(group.members.map((member) => [member.id, member]));
+
+  return (
+    <section className="panel line-log-panel">
+      <header className="panel-header">
+        <div>
+          <p className="eyebrow">Chronological audit trail</p>
+          <h2>Logged lines</h2>
+        </div>
+        <span className="panel-meta mono">
+          {lines.length} {lines.length === 1 ? 'PART' : 'PARTS'}
+        </span>
+      </header>
+
+      {lines.length === 0 ? (
+        <div className="line-log-empty">
+          <ListMusic size={22} />
+          <p>No lines logged yet. Capture the first part in the panel on the right.</p>
+        </div>
+      ) : (
+        <div className="line-log-list">
+          {lines.map((line) => {
+            const selected = line.id === selectedLineId;
+            const editing = line.id === editingLineId;
+            return (
+              <article
+                key={line.id}
+                className={`line-log-row ${selected ? 'is-selected' : ''} ${
+                  editing ? 'is-editing' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  className="line-log-main"
+                  onClick={() => {
+                    onSelect(line.id);
+                    onSeek(line.startSec);
+                  }}
+                  aria-current={selected ? 'true' : undefined}
+                >
+                  <span className="line-log-time mono">
+                    <span>{formatClock(line.startSec, true)}</span>
+                    <span className="line-log-arrow">→</span>
+                    <span>{formatClock(line.endSec, true)}</span>
+                  </span>
+
+                  <span
+                    className={`line-kind-badge ${
+                      line.kind === 'adlib' ? 'is-adlib' : 'is-sung'
+                    }`}
+                  >
+                    {line.kind === 'adlib' ? 'Ad-lib' : 'Line'}
+                  </span>
+
+                  <span className="line-log-copy">
+                    <span className="line-log-members">
+                      {line.memberIds.map((memberId) => {
+                        const member = memberById.get(memberId);
+                        if (!member) return null;
+                        return (
+                          <span key={memberId} className="line-log-member">
+                            <span
+                              className="mini-color-dot"
+                              style={{ backgroundColor: member.color }}
+                              aria-hidden="true"
+                            />
+                            {member.name || 'Unnamed member'}
+                          </span>
+                        );
+                      })}
+                    </span>
+                    {line.lyric ? (
+                      <span className="line-log-lyric">“{line.lyric}”</span>
+                    ) : null}
+                    {line.note ? <span className="line-log-note">{line.note}</span> : null}
+                  </span>
+                </button>
+
+                <div className="line-log-actions">
+                  <span className="line-log-duration mono">
+                    {lineDuration(line).toFixed(1)}s
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-button icon-button-small"
+                    onClick={() => onSeek(line.startSec)}
+                    title="Seek to this line"
+                    aria-label={`Seek to ${formatClock(line.startSec, true)}`}
+                  >
+                    <Play size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button icon-button-small"
+                    onClick={() => onEdit(line)}
+                    title="Edit line"
+                    aria-label={`Edit line at ${formatClock(line.startSec, true)}`}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button icon-button-small line-log-delete"
+                    onClick={() => onDelete(line.id)}
+                    title="Delete line"
+                    aria-label={`Delete line at ${formatClock(line.startSec, true)}`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
