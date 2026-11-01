@@ -14,27 +14,39 @@ interface ModalProps {
 
 export function Modal({ open, onClose, title, eyebrow, children, footer, size = 'md' }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', handleKey);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const timer = window.setTimeout(() => {
-      const focusable = panelRef.current?.querySelector<HTMLElement>(
-        'input:not([type="hidden"]), textarea, select, button',
-      );
-      focusable?.focus();
+      const panel = panelRef.current;
+      if (!panel || panel.contains(document.activeElement)) return;
+      const target =
+        panel.querySelector<HTMLElement>('[data-autofocus]') ??
+        panel.querySelector<HTMLElement>('.modal-body input:not([type="hidden"])') ??
+        panel.querySelector<HTMLElement>('.modal-body textarea') ??
+        panel.querySelector<HTMLElement>('.modal-body select') ??
+        panel.querySelector<HTMLElement>('.modal-footer button') ??
+        panel.querySelector<HTMLElement>('.modal-body button') ??
+        panel.querySelector<HTMLElement>('button');
+      target?.focus();
     }, 40);
     return () => {
       document.removeEventListener('keydown', handleKey);
       document.body.style.overflow = previousOverflow;
       window.clearTimeout(timer);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

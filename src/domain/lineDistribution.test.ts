@@ -23,6 +23,8 @@ function song(lines: VocalLine[], durationSec = 180): Song {
     title: 'Song',
     durationSec,
     videoFileName: null,
+    audioFileName: null,
+    sourceUrl: null,
     grid: { cols: 9, rows: 5 },
     sections: [],
     lines,

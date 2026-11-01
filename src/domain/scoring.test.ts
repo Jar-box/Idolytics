@@ -44,6 +44,8 @@ function song(id: string, sections: Section[]): Song {
     title: id,
     durationSec: 300,
     videoFileName: null,
+    audioFileName: null,
+    sourceUrl: null,
     grid: { cols: 9, rows: 5 },
     sections,
     lines: [],

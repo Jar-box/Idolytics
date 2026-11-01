@@ -24,12 +24,18 @@ export function createMember(name: string, colorIndex = 0): Member {
   };
 }
 
-export function createSong(title: string, durationSec: number): Song {
+export function createSong(
+  title: string,
+  durationSec: number,
+  sourceUrl: string | null = null,
+): Song {
   return {
     id: newId('sng'),
     title,
     durationSec,
     videoFileName: null,
+    audioFileName: null,
+    sourceUrl,
     grid: { ...DEFAULT_GRID },
     sections: [],
     lines: [],

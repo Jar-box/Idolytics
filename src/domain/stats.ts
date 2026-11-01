@@ -1,4 +1,4 @@
-import type { Group, Song, Workspace } from './schema';
+import type { Group, Song, Workspace } from './schema.ts';
 
 export interface ChoreoCounts {
   sections: number;

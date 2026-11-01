@@ -77,6 +77,8 @@ export const songSchema = z.object({
   title: labelSchema,
   durationSec: z.number().min(0).max(60 * 60 * 12),
   videoFileName: z.string().nullable(),
+  audioFileName: z.string().nullable().default(null),
+  sourceUrl: z.string().max(2048).nullable().default(null),
   grid: gridSchema,
   sections: z.array(sectionSchema).max(100),
   lines: z.array(vocalLineSchema).max(4000).default([]),

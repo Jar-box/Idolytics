@@ -178,12 +178,14 @@ export function LineCaptureForm({
             label="Start"
             value={start}
             onChange={setStart}
+            currentTimeLabel="audio"
             onUseCurrentTime={() => setStart(roundTo(currentTime, 1))}
           />
           <ClockInput
             label="End"
             value={end}
             onChange={setEnd}
+            currentTimeLabel="audio"
             onUseCurrentTime={() => setEnd(roundTo(currentTime, 1))}
           />
         </div>

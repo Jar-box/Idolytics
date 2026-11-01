@@ -7,6 +7,8 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: 'danger' | 'default';
+  busy?: boolean;
+  busyLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -18,27 +20,31 @@ export function ConfirmDialog({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   tone = 'default',
+  busy = false,
+  busyLabel = 'Working…',
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   return (
     <Modal
       open={open}
-      onClose={onCancel}
+      onClose={busy ? () => undefined : onCancel}
       title={title}
       eyebrow="Confirm"
       size="sm"
       footer={
         <>
-          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </button>
           <button
             type="button"
             className={`btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}`}
             onClick={onConfirm}
+            disabled={busy}
+            aria-busy={busy || undefined}
           >
-            {confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </>
       }

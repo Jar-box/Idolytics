@@ -8,6 +8,13 @@ dist-ssr/
 # Test output
 coverage/
 
+# Local media library (created by the dev server)
+media/*
+!media/README.md
+
+# Local workspace backups (created by the dev server)
+backups/
+
 # Local env files
 .env
 .env.*

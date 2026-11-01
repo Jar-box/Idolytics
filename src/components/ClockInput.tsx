@@ -7,6 +7,7 @@ interface ClockInputProps {
   value: number;
   onChange: (value: number) => void;
   onUseCurrentTime?: () => void;
+  currentTimeLabel?: 'audio' | 'video';
   disabled?: boolean;
   hint?: string;
 }
@@ -16,6 +17,7 @@ export function ClockInput({
   value,
   onChange,
   onUseCurrentTime,
+  currentTimeLabel = 'video',
   disabled,
   hint,
 }: ClockInputProps) {
@@ -63,8 +65,8 @@ export function ClockInput({
             type="button"
             className="icon-button icon-button-small"
             onClick={onUseCurrentTime}
-            title="Use current video time"
-            aria-label={`Use current video time for ${label}`}
+            title={`Use current ${currentTimeLabel} time`}
+            aria-label={`Use current ${currentTimeLabel} time for ${label}`}
             disabled={disabled}
           >
             <Timer size={15} />

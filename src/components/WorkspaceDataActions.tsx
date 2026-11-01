@@ -1,6 +1,9 @@
 import { useRef, useState } from 'react';
 import { AlertTriangle, Download, RotateCcw, Upload } from 'lucide-react';
 import type { Workspace } from '../domain/schema';
+import { workspaceBackupSupported } from '../lib/workspaceBackup';
+import type { WorkspaceBackupSource } from '../lib/workspaceBackupTypes';
+import { useBackupStore } from '../store/backupStore';
 import { parseWorkspaceJson, saveWorkspaceToDisk } from '../store/persistence';
 import { useWorkspaceStore } from '../store/workspaceStore';
 import { useNavStore } from '../store/navStore';
@@ -23,10 +26,58 @@ export function WorkspaceDataActions({ showReset = false }: WorkspaceDataActions
   const [pendingWorkspace, setPendingWorkspace] = useState<Workspace | null>(null);
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const importSongCount = pendingWorkspace
     ? pendingWorkspace.groups.reduce((total, group) => total + group.songs.length, 0)
     : 0;
+
+  const backupBefore = async (
+    source: WorkspaceBackupSource,
+    action: string,
+  ): Promise<boolean> => {
+    if (!workspaceBackupSupported()) return true;
+    const current = useWorkspaceStore.getState().workspace;
+    if (current.groups.length === 0) return true;
+    try {
+      await useBackupStore.getState().create(current, source);
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      pushToast(
+        `Could not create a safety backup, so ${action} was cancelled.${detail}`,
+        'error',
+      );
+      return false;
+    }
+  };
+
+  const handleImportConfirm = async () => {
+    if (!pendingWorkspace) return;
+    setBusy(true);
+    try {
+      if (!(await backupBefore('pre-import', 'the import'))) return;
+      replaceWorkspace(pendingWorkspace);
+      setPendingWorkspace(null);
+      goWorkspace();
+      pushToast('Workspace imported.', 'success');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResetConfirm = async () => {
+    setBusy(true);
+    try {
+      if (!(await backupBefore('pre-reset', 'the reset'))) return;
+      resetWorkspace();
+      setResetOpen(false);
+      goWorkspace();
+      pushToast('Workspace reset.', 'success');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleExport = async () => {
     try {
@@ -98,34 +149,27 @@ export function WorkspaceDataActions({ showReset = false }: WorkspaceDataActions
           pendingWorkspace
             ? `This import contains ${pendingWorkspace.groups.length} ${
                 pendingWorkspace.groups.length === 1 ? 'group' : 'groups'
-              } and ${importSongCount} ${importSongCount === 1 ? 'song' : 'songs'}. It will replace everything currently in this workspace.`
+              } and ${importSongCount} ${importSongCount === 1 ? 'song' : 'songs'}. It will replace everything currently in this workspace; a safety backup is written first while the local dev server is running.`
             : ''
         }
         confirmLabel="Replace workspace"
+        busyLabel="Backing up…"
         tone="danger"
+        busy={busy}
         onCancel={() => setPendingWorkspace(null)}
-        onConfirm={() => {
-          if (!pendingWorkspace) return;
-          replaceWorkspace(pendingWorkspace);
-          setPendingWorkspace(null);
-          goWorkspace();
-          pushToast('Workspace imported.', 'success');
-        }}
+        onConfirm={() => void handleImportConfirm()}
       />
 
       <ConfirmDialog
         open={resetOpen}
         title="Reset the workspace?"
-        message="Every group, member, song, section, formation, and logged line in this browser will be removed. Export a backup first if you need one."
+        message="Every group, member, song, section, formation, and logged line in this browser will be removed. A safety backup is written to the project's backups folder first while the local dev server is running. Export a JSON file too if you need a portable copy."
         confirmLabel="Reset everything"
+        busyLabel="Backing up…"
         tone="danger"
+        busy={busy}
         onCancel={() => setResetOpen(false)}
-        onConfirm={() => {
-          resetWorkspace();
-          setResetOpen(false);
-          goWorkspace();
-          pushToast('Workspace reset.', 'success');
-        }}
+        onConfirm={() => void handleResetConfirm()}
       />
 
       <Modal

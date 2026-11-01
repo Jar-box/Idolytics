@@ -4,11 +4,12 @@ import type { Group, Song } from '../../domain/schema';
 import { buildLineDistribution } from '../../domain/lineDistribution';
 import { EmptyState } from '../../components/EmptyState';
 import { StatsRow } from '../../components/StatsRow';
+import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
 import { formatClock, formatPercent } from '../../lib/time';
 import { useNavStore } from '../../store/navStore';
 import { useToastStore } from '../../store/toastStore';
 import { useWorkspaceStore } from '../../store/workspaceStore';
-import { VideoPanel } from '../choreo/VideoPanel';
+import { AudioPanel } from './AudioPanel';
 import {
   DistributionChart,
   type DistributionSortMode,
@@ -19,23 +20,33 @@ import { LineLog } from './LineLog';
 interface LineDistributionPanelProps {
   group: Group;
   song: Song;
-  videoUrl: string | null;
-  videoRef: RefObject<HTMLVideoElement | null>;
+  audioUrl: string | null;
+  audioRef: RefObject<HTMLAudioElement | null>;
   currentTime: number;
-  onVideoFile: (file: File) => void;
+  audioResolving?: boolean;
+  audioSource?: MediaSource | null;
+  audioCopyState?: MediaCopyState | null;
+  onAudioFile: (file: File) => void;
   onTimeUpdate: (time: number) => void;
-  onLoadedMetadata: (duration: number) => void;
+  onUseTrackDuration: (duration: number) => void;
+  onRetryAudioCopy?: () => void;
+  onImportAudioUrl?: () => void;
 }
 
 export function LineDistributionPanel({
   group,
   song,
-  videoUrl,
-  videoRef,
+  audioUrl,
+  audioRef,
   currentTime,
-  onVideoFile,
+  audioResolving = false,
+  audioSource = null,
+  audioCopyState = null,
+  onAudioFile,
   onTimeUpdate,
-  onLoadedMetadata,
+  onUseTrackDuration,
+  onRetryAudioCopy,
+  onImportAudioUrl,
 }: LineDistributionPanelProps) {
   const deleteLine = useWorkspaceStore((state) => state.deleteLine);
   const goGroup = useNavStore((state) => state.goGroup);
@@ -79,10 +90,15 @@ export function LineDistributionPanel({
   const seek = (time: number) => {
     const next = Math.max(0, Math.min(time, distribution.spanSec));
     onTimeUpdate(next);
-    const video = videoRef.current;
-    if (video && videoUrl) {
-      video.pause();
-      video.currentTime = next;
+    const audio = audioRef.current;
+    if (audio && audioUrl) {
+      audio.pause();
+      try {
+        const max = Number.isFinite(audio.duration) ? audio.duration : next;
+        audio.currentTime = Math.min(next, max);
+      } catch {
+        // Metadata may not be ready yet; the panel seeks on load instead.
+      }
     }
   };
 
@@ -188,15 +204,21 @@ export function LineDistributionPanel({
         </div>
 
         <aside className="line-sidebar">
-          <VideoPanel
-            fileName={song.videoFileName}
-            videoUrl={videoUrl}
-            videoRef={videoRef}
+          <AudioPanel
+            fileName={song.audioFileName}
+            audioUrl={audioUrl}
+            audioRef={audioRef}
             currentTime={currentTime}
             initialTime={currentTime}
+            songDuration={song.durationSec}
+            mediaResolving={audioResolving}
+            mediaSource={audioSource}
+            copyState={audioCopyState}
             onTimeUpdate={onTimeUpdate}
-            onFile={onVideoFile}
-            onLoadedMetadata={onLoadedMetadata}
+            onFile={onAudioFile}
+            onUseTrackDuration={onUseTrackDuration}
+            onRetryCopy={onRetryAudioCopy}
+            onImportUrl={onImportAudioUrl}
           />
 
           <LineCaptureForm
@@ -217,7 +239,9 @@ export function LineDistributionPanel({
       {distribution.lineCount === 0 ? (
         <p className="line-first-hint">
           <MicVocal size={15} />
-          Play the linked video, mark a start and end, pick who sings it, and save the first line.
+          {audioUrl
+            ? 'Play the song audio, mark a start and end, pick who sings it, and save the first line.'
+            : 'Link the song audio in the sidebar, mark a start and end, pick who sings it, and save the first line.'}
         </p>
       ) : null}
     </div>

@@ -21,6 +21,8 @@ function validWorkspace(): Workspace {
             title: 'Song',
             durationSec: 120,
             videoFileName: null,
+            audioFileName: null,
+            sourceUrl: null,
             grid: { cols: 9, rows: 5 },
             lines: [],
             sections: [

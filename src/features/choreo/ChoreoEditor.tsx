@@ -15,6 +15,7 @@ import { scoreFormation } from '../../domain/scoring';
 import { choreoCounts } from '../../domain/stats';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/EmptyState';
+import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
 import { formatClock } from '../../lib/time';
 import { useNavStore } from '../../store/navStore';
 import { useToastStore } from '../../store/toastStore';
@@ -35,9 +36,14 @@ interface ChoreoEditorProps {
   videoRef: RefObject<HTMLVideoElement | null>;
   videoDuration: number;
   currentTime: number;
+  videoResolving?: boolean;
+  videoSource?: MediaSource | null;
+  videoCopyState?: MediaCopyState | null;
   onVideoFile: (file: File) => void;
   onTimeUpdate: (time: number) => void;
   onLoadedMetadata: (duration: number) => void;
+  onRetryVideoCopy?: () => void;
+  onImportVideoUrl?: () => void;
 }
 
 type SectionModalState =
@@ -52,9 +58,14 @@ export function ChoreoEditor({
   videoRef,
   videoDuration,
   currentTime,
+  videoResolving = false,
+  videoSource = null,
+  videoCopyState = null,
   onVideoFile,
   onTimeUpdate,
   onLoadedMetadata,
+  onRetryVideoCopy,
+  onImportVideoUrl,
 }: ChoreoEditorProps) {
   const postures = useWorkspaceStore((state) => state.workspace.settings.postures);
   const addFormation = useWorkspaceStore((state) => state.addFormation);
@@ -302,9 +313,14 @@ export function ChoreoEditor({
             videoRef={videoRef}
             currentTime={currentTime}
             initialTime={currentTime}
+            mediaResolving={videoResolving}
+            mediaSource={videoSource}
+            copyState={videoCopyState}
             onTimeUpdate={onTimeUpdate}
             onFile={onVideoFile}
             onLoadedMetadata={onLoadedMetadata}
+            onRetryCopy={onRetryVideoCopy}
+            onImportUrl={onImportVideoUrl}
           />
           <SectionTimeline
             sections={sections}

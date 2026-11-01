@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronLeft, ChevronRight, Film, Link2, Video } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Film,
+  HardDrive,
+  Link2,
+  LoaderCircle,
+  Video,
+} from 'lucide-react';
+import { MediaCopyNote } from '../../components/MediaCopyNote';
+import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
 import { formatClock, clamp } from '../../lib/time';
 
 interface VideoPanelProps {
@@ -8,9 +19,14 @@ interface VideoPanelProps {
   videoRef: RefObject<HTMLVideoElement | null>;
   currentTime: number;
   initialTime?: number;
+  mediaResolving?: boolean;
+  mediaSource?: MediaSource | null;
+  copyState?: MediaCopyState | null;
   onTimeUpdate: (time: number) => void;
   onFile: (file: File) => void;
   onLoadedMetadata: (duration: number) => void;
+  onRetryCopy?: () => void;
+  onImportUrl?: () => void;
 }
 
 const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5];
@@ -21,9 +37,14 @@ export function VideoPanel({
   videoRef,
   currentTime,
   initialTime = 0,
+  mediaResolving = false,
+  mediaSource = null,
+  copyState = null,
   onTimeUpdate,
   onFile,
   onLoadedMetadata,
+  onRetryCopy,
+  onImportUrl,
 }: VideoPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [rate, setRate] = useState(1);
@@ -51,14 +72,32 @@ export function VideoPanel({
           <p className="eyebrow">Reference footage</p>
           <h2>Choreo video</h2>
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost btn-small"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Link2 size={14} />
-          {videoUrl ? 'Relink' : 'Link video'}
-        </button>
+        <div className="media-panel-actions">
+          {mediaSource === 'library' ? (
+            <span className="media-source-chip">
+              <HardDrive size={11} />
+              Library
+            </span>
+          ) : null}
+          {onImportUrl ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={onImportUrl}
+            >
+              <Download size={14} />
+              Import URL
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Link2 size={14} />
+            {videoUrl ? 'Relink' : 'Link video'}
+          </button>
+        </div>
       </header>
 
       {videoUrl ? (
@@ -131,7 +170,16 @@ export function VideoPanel({
               This browser could not play the selected file. Try an MP4 encoded with H.264.
             </p>
           ) : null}
+          <MediaCopyNote state={copyState} onRetry={onRetryCopy} />
         </>
+      ) : fileName && mediaResolving ? (
+        <div className="video-empty">
+          <div className="video-empty-icon">
+            <LoaderCircle className="is-spinning" size={24} />
+          </div>
+          <h3>Restoring from the media library</h3>
+          <p>Looking for the saved copy of “{fileName}” in the project media folder.</p>
+        </div>
       ) : (
         <div className="video-empty">
           <div className="video-empty-icon">
@@ -151,11 +199,21 @@ export function VideoPanel({
             <Video size={15} />
             {fileName ? 'Re-link video file' : 'Choose video file'}
           </button>
+          {onImportUrl ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={onImportUrl}
+            >
+              <Download size={15} />
+              Import from URL
+            </button>
+          ) : null}
         </div>
       )}
 
       <p className="video-note">
-        Videos stay on your device and are re-linked each session. Timestamps are saved.
+        Videos stay on your device and are never embedded in the workspace. Timestamps are saved.
       </p>
 
       <input

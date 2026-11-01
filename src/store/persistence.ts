@@ -25,6 +25,10 @@ export function parseWorkspaceJson(text: string): WorkspaceParseResult {
   } catch {
     return { ok: false, errors: ['The file is not valid JSON.'] };
   }
+  return parseWorkspaceValue(raw);
+}
+
+export function parseWorkspaceValue(raw: unknown): WorkspaceParseResult {
   const parsed = workspaceSchema.safeParse(raw);
   if (!parsed.success) {
     return {

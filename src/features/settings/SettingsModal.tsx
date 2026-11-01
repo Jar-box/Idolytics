@@ -1,9 +1,31 @@
-import { useMemo, useState, type FormEvent } from 'react';
-import { Activity, BookOpen, Database, Layers, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  Activity,
+  BookOpen,
+  Database,
+  Download,
+  FolderSync,
+  Globe,
+  HardDrive,
+  Layers,
+  Plus,
+  RefreshCw,
+  Trash2,
+  TriangleAlert,
+} from 'lucide-react';
 import { Modal } from '../../components/Modal';
+import { WorkspaceBackupPanel } from '../../components/WorkspaceBackupPanel';
 import { WorkspaceDataActions } from '../../components/WorkspaceDataActions';
 import { workspaceStats } from '../../domain/stats';
+import {
+  CANONICAL_DEV_ORIGIN,
+  getStorageOrigin,
+  isDevOriginMismatch,
+} from '../../lib/devOrigin';
+import { countMediaCopies, mediaLibrarySupported } from '../../lib/mediaSync';
 import { formatClock } from '../../lib/time';
+import { useBackupStore } from '../../store/backupStore';
+import { useMediaStore } from '../../store/mediaStore';
 import { useToastStore } from '../../store/toastStore';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 
@@ -12,13 +34,25 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'data' | 'postures' | 'rules';
+type SettingsTab = 'data' | 'media' | 'postures' | 'rules';
 
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const workspace = useWorkspaceStore((state) => state.workspace);
   const addPosture = useWorkspaceStore((state) => state.addPosture);
   const updatePosture = useWorkspaceStore((state) => state.updatePosture);
   const deletePosture = useWorkspaceStore((state) => state.deletePosture);
+  const mediaStatus = useMediaStore((state) => state.status);
+  const mediaManifest = useMediaStore((state) => state.manifest);
+  const mediaLibraryPath = useMediaStore((state) => state.libraryPath);
+  const mediaLastSyncedAt = useMediaStore((state) => state.lastSyncedAt);
+  const mediaError = useMediaStore((state) => state.error);
+  const mediaSyncing = useMediaStore((state) => state.syncing);
+  const mediaCopyEnabled = useMediaStore((state) => state.copyEnabled);
+  const mediaTools = useMediaStore((state) => state.tools);
+  const refreshMedia = useMediaStore((state) => state.refresh);
+  const syncMedia = useMediaStore((state) => state.sync);
+  const setMediaCopyEnabled = useMediaStore((state) => state.setCopyEnabled);
+  const refreshBackups = useBackupStore((state) => state.refresh);
   const pushToast = useToastStore((state) => state.push);
 
   const [tab, setTab] = useState<SettingsTab>('data');
@@ -41,6 +75,47 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
     return counts;
   }, [workspace]);
+
+  const mediaCounts = useMemo(() => countMediaCopies(mediaManifest), [mediaManifest]);
+  const mediaGroupCount = mediaManifest
+    ? Object.keys(mediaManifest.groups).length
+    : 0;
+  const mediaSongCount = mediaManifest
+    ? Object.values(mediaManifest.groups).reduce(
+        (total, group) => total + Object.keys(group.songs).length,
+        0,
+      )
+    : 0;
+  const mediaStatusText =
+    mediaStatus === 'ready'
+      ? mediaSyncing
+        ? 'Syncing'
+        : 'Ready'
+      : mediaStatus === 'checking'
+        ? 'Checking'
+        : 'Unavailable';
+  const mediaLastSyncText =
+    mediaLastSyncedAt && new Date(mediaLastSyncedAt).getTime() > 0
+      ? new Date(mediaLastSyncedAt).toLocaleString()
+      : 'Not yet';
+  const mediaToolsReady = Boolean(
+    mediaTools?.ytDlp.available && mediaTools?.ffmpeg.available,
+  );
+  const cookiesText = mediaTools?.cookies === 'browser'
+    ? 'Browser export'
+    : mediaTools?.cookies === 'file'
+      ? 'Cookie file'
+      : 'None';
+  const storageOrigin = getStorageOrigin();
+  const originMismatch = isDevOriginMismatch();
+
+  useEffect(() => {
+    if (open && tab === 'media') void refreshMedia();
+  }, [open, tab, refreshMedia]);
+
+  useEffect(() => {
+    if (open && tab === 'data') void refreshBackups();
+  }, [open, tab, refreshBackups]);
 
   const handleAddPosture = (event: FormEvent) => {
     event.preventDefault();
@@ -81,6 +156,14 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           >
             <Database size={16} />
             Data
+          </button>
+          <button
+            type="button"
+            className={tab === 'media' ? 'is-active' : ''}
+            onClick={() => setTab('media')}
+          >
+            <HardDrive size={16} />
+            Media
           </button>
           <button
             type="button"
@@ -129,7 +212,23 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                   <strong className="mono">{formatClock(stats.choreoSeconds)}</strong>
                 </div>
               </div>
+              <div className={`settings-note ${originMismatch ? 'is-warning' : ''}`}>
+                <Globe size={15} />
+                <p>
+                  Storage origin <code>{storageOrigin}</code>.{' '}
+                  {originMismatch ? (
+                    <>
+                      This is not the pinned dev origin <code>{CANONICAL_DEV_ORIGIN}</code>.
+                      Browser data saved here is separate from your main workspace. Local backups
+                      are shared across ports.
+                    </>
+                  ) : (
+                    <>Browser data belongs to this exact address.</>
+                  )}
+                </p>
+              </div>
               <WorkspaceDataActions showReset />
+              <WorkspaceBackupPanel />
               <div className="settings-note">
                 <Activity size={15} />
                 <p>
@@ -137,6 +236,165 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                   warning and the last successful data stays in this browser.
                 </p>
               </div>
+            </div>
+          ) : null}
+
+          {tab === 'media' ? (
+            <div className="settings-section">
+              <div className="settings-heading">
+                <p className="eyebrow">Local development</p>
+                <h3>Media library</h3>
+              </div>
+              <p className="settings-copy">
+                Linked audio and video are copied into a folder inside this project so songs reopen
+                without re-linking. The dev server keeps folders in step with group and song names.
+              </p>
+              <div className="settings-fact-grid media-status-grid">
+                <div>
+                  <span>Status</span>
+                  <strong className={mediaStatus === 'ready' ? 'is-ready' : ''}>
+                    {mediaStatusText}
+                  </strong>
+                </div>
+                <div>
+                  <span>Library</span>
+                  <strong className="mono media-path" title={mediaLibraryPath ?? 'media'}>
+                    {mediaLibraryPath ?? 'media'}/
+                  </strong>
+                </div>
+                <div>
+                  <span>Tracked</span>
+                  <strong className="mono">
+                    {mediaGroupCount} / {mediaSongCount}
+                  </strong>
+                </div>
+                <div>
+                  <span>Copied files</span>
+                  <strong className="mono">
+                    {mediaCounts.audio + mediaCounts.video}
+                  </strong>
+                </div>
+              </div>
+              <div className="media-settings-actions">
+                <label className="media-toggle">
+                  <input
+                    type="checkbox"
+                    checked={mediaCopyEnabled}
+                    onChange={(event) => setMediaCopyEnabled(event.target.checked)}
+                  />
+                  <span className="media-toggle-track" aria-hidden="true">
+                    <span />
+                  </span>
+                  <span className="media-toggle-copy">
+                    <strong>Auto-copy linked media</strong>
+                    <small>
+                      Copy audio and video into the project library as soon as you link them.
+                    </small>
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  disabled={mediaSyncing}
+                  onClick={() => void syncMedia(workspace, true)}
+                >
+                  <RefreshCw
+                    size={13}
+                    className={mediaSyncing ? 'is-spinning' : undefined}
+                  />
+                  {mediaSyncing ? 'Syncing…' : 'Sync now'}
+                </button>
+              </div>
+              <div className="media-status-foot mono">
+                <span>Last sync · {mediaLastSyncText}</span>
+                <span>
+                  {mediaCounts.audio} audio · {mediaCounts.video} video
+                </span>
+              </div>
+
+              <div className="settings-heading media-import-settings-heading">
+                <p className="eyebrow">URL imports</p>
+                <h3>Download tools</h3>
+              </div>
+              <p className="settings-copy">
+                Paste a link into the video or audio panel to download it straight into this
+                project&apos;s media folder. Downloads run locally through yt-dlp and need ffmpeg to
+                finish.
+              </p>
+              <div className="settings-fact-grid media-status-grid">
+                <div>
+                  <span>yt-dlp</span>
+                  <strong className={mediaTools?.ytDlp.available ? 'is-ready' : ''}>
+                    {mediaTools
+                      ? mediaTools.ytDlp.available
+                        ? (mediaTools.ytDlp.version ?? 'Ready')
+                        : 'Not found'
+                      : 'Checking…'}
+                  </strong>
+                </div>
+                <div>
+                  <span>ffmpeg</span>
+                  <strong className={mediaTools?.ffmpeg.available ? 'is-ready' : ''}>
+                    {mediaTools
+                      ? mediaTools.ffmpeg.available
+                        ? (mediaTools.ffmpeg.version ?? 'Ready')
+                        : 'Not found'
+                      : 'Checking…'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Cookies</span>
+                  <strong className="mono">{cookiesText}</strong>
+                </div>
+                <div>
+                  <span>URL import</span>
+                  <strong className={mediaToolsReady ? 'is-ready' : ''}>
+                    {mediaToolsReady ? 'Ready' : mediaTools ? 'Unavailable' : 'Checking…'}
+                  </strong>
+                </div>
+              </div>
+              {mediaTools && !mediaToolsReady ? (
+                <div className="settings-note is-warning">
+                  <TriangleAlert size={15} />
+                  <p>
+                    Install yt-dlp and ffmpeg, make both available on PATH, then restart the dev
+                    server. You can also point to custom binaries with{' '}
+                    <code>IDOLYTICS_YTDLP_PATH</code> and <code>IDOLYTICS_FFMPEG_PATH</code>.
+                  </p>
+                </div>
+              ) : (
+                <div className="settings-note">
+                  <Download size={15} />
+                  <p>
+                    For private or age-restricted links, start the dev server with{' '}
+                    <code>IDOLYTICS_YTDLP_COOKIES_FROM_BROWSER=chrome</code> or set{' '}
+                    <code>IDOLYTICS_YTDLP_COOKIES_FILE</code> to a cookies.txt file.
+                  </p>
+                </div>
+              )}
+              {mediaError ? (
+                <div className="settings-note is-warning">
+                  <TriangleAlert size={15} />
+                  <p>{mediaError}</p>
+                </div>
+              ) : null}
+              <div className="settings-note">
+                <FolderSync size={15} />
+                <p>
+                  Folders follow group and song names: <code>media/groups/&lt;Group&gt;/songs/&lt;Song&gt;</code>.
+                  Renames move the folder, while deleting a group or song leaves its media in place.
+                  Files are never uploaded or included in workspace exports.
+                </p>
+              </div>
+              {!mediaLibrarySupported() ? (
+                <div className="settings-note">
+                  <HardDrive size={15} />
+                  <p>
+                    Media library copying runs only with the local dev server. Production builds use
+                    the regular re-link flow and keep files on your device.
+                  </p>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

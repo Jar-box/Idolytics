@@ -9,6 +9,7 @@ import {
 } from '../domain/schema';
 import { validateWorkspaceIntegrity } from '../domain/integrity';
 import { migrateLegacyMemberColors } from '../domain/migrations';
+import { assignRandomMemberColors, randomUnusedMemberColor } from '../domain/colors';
 import {
   createFormation,
   createGroup,
@@ -26,6 +27,8 @@ const COALESCE_MS = 800;
 const EPSILON = 1e-6;
 const MAX_TIME = 60 * 60 * 12;
 const MAX_LINE_TEXT = 300;
+const MAX_MEMBERS = 60;
+const MAX_MEMBER_NAME = 80;
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -87,17 +90,32 @@ interface WorkspaceState {
     face: string | null,
     color?: string,
   ) => string | null;
+  createMembers: (
+    groupId: string,
+    entries: Array<{ name: string; face?: string | null }>,
+  ) => string[];
   updateMember: (
     groupId: string,
     memberId: string,
     patch: { name?: string; face?: string | null; color?: string },
   ) => void;
   deleteMember: (groupId: string, memberId: string) => void;
-  createSong: (groupId: string, title: string, durationSec: number) => string | null;
+  createSong: (
+    groupId: string,
+    title: string,
+    durationSec: number,
+    sourceUrl?: string | null,
+  ) => string | null;
   updateSong: (
     groupId: string,
     songId: string,
-    patch: { title?: string; durationSec?: number; videoFileName?: string | null },
+    patch: {
+      title?: string;
+      durationSec?: number;
+      videoFileName?: string | null;
+      audioFileName?: string | null;
+      sourceUrl?: string | null;
+    },
   ) => void;
   deleteSong: (groupId: string, songId: string) => void;
   addLine: (groupId: string, songId: string, input: LineInput) => string | null;
@@ -334,13 +352,40 @@ export const useWorkspaceStore = create<WorkspaceState>((setState, getState) => 
     createMember: (groupId, name, face, color) => {
       const group = getGroup(getState().workspace, groupId);
       if (!group) return null;
-      const member = createMember(name, group.members.length);
+      if (group.members.length >= MAX_MEMBERS) return null;
+      const member = createMember(name, 0);
       member.face = face;
-      if (color) member.color = color;
+      member.color = color || randomUnusedMemberColor(group.members);
       commit('create-member', (draft) => {
         getGroup(draft, groupId)?.members.push(member);
       });
       return member.id;
+    },
+
+    createMembers: (groupId, entries) => {
+      const group = getGroup(getState().workspace, groupId);
+      if (!group) return [];
+      const remainingSlots = Math.max(0, MAX_MEMBERS - group.members.length);
+      const cleaned = entries
+        .map((entry) => ({
+          name: entry.name.trim().slice(0, MAX_MEMBER_NAME),
+          face: entry.face ?? null,
+        }))
+        .filter((entry) => entry.name.length > 0)
+        .slice(0, remainingSlots);
+      if (cleaned.length === 0) return [];
+
+      const colors = assignRandomMemberColors(group.members, cleaned.length);
+      const members = cleaned.map((entry, index) => {
+        const member = createMember(entry.name, 0);
+        member.face = entry.face;
+        member.color = colors[index];
+        return member;
+      });
+      commit('create-members', (draft) => {
+        getGroup(draft, groupId)?.members.push(...members);
+      });
+      return members.map((member) => member.id);
     },
 
     updateMember: (groupId, memberId, patch) => {
@@ -377,9 +422,9 @@ export const useWorkspaceStore = create<WorkspaceState>((setState, getState) => 
       });
     },
 
-    createSong: (groupId, title, durationSec) => {
+    createSong: (groupId, title, durationSec, sourceUrl) => {
       if (!getGroup(getState().workspace, groupId)) return null;
-      const song = createSong(title, durationSec);
+      const song = createSong(title, durationSec, sourceUrl ?? null);
       commit('create-song', (draft) => {
         getGroup(draft, groupId)?.songs.push(song);
       });
@@ -393,6 +438,8 @@ export const useWorkspaceStore = create<WorkspaceState>((setState, getState) => 
         if (patch.title !== undefined) song.title = patch.title;
         if (patch.durationSec !== undefined) song.durationSec = patch.durationSec;
         if (patch.videoFileName !== undefined) song.videoFileName = patch.videoFileName;
+        if (patch.audioFileName !== undefined) song.audioFileName = patch.audioFileName;
+        if (patch.sourceUrl !== undefined) song.sourceUrl = patch.sourceUrl;
       });
     },
 
