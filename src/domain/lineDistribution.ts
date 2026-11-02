@@ -34,6 +34,18 @@ export function lineDuration(line: VocalLine): number {
   return Math.max(0, line.endSec - line.startSec);
 }
 
+/**
+ * Returns every line that is active at `timeSec`. Starts are inclusive and
+ * ends are exclusive, so overlapping ad-libs are all reported and a line
+ * never lingers past its end.
+ */
+export function linesAtTime(lines: VocalLine[], timeSec: number): VocalLine[] {
+  return lines.filter(
+    (line) =>
+      timeSec >= line.startSec - EPSILON && timeSec < line.endSec - EPSILON,
+  );
+}
+
 function sortLines(lines: VocalLine[]): VocalLine[] {
   return [...lines].sort(
     (a, b) => a.startSec - b.startSec || a.endSec - b.endSec || a.id.localeCompare(b.id),

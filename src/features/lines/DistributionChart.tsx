@@ -24,6 +24,7 @@ interface DistributionChartProps {
   rows: MemberDistribution[];
   spanSec: number;
   currentTime: number;
+  activeLines: VocalLine[];
   sortMode: DistributionSortMode;
   onSortChange: (mode: DistributionSortMode) => void;
   selectedLineId: string | null;
@@ -57,6 +58,7 @@ export function DistributionChart({
   rows,
   spanSec,
   currentTime,
+  activeLines,
   sortMode,
   onSortChange,
   selectedLineId,
@@ -73,14 +75,30 @@ export function DistributionChart({
     () => new Map(song.lines.map((line) => [line.id, line])),
     [song.lines],
   );
+  const activeLineIds = useMemo(
+    () => new Set(activeLines.map((line) => line.id)),
+    [activeLines],
+  );
+  const activeMemberIds = useMemo(
+    () => new Set(activeLines.flatMap((line) => line.memberIds)),
+    [activeLines],
+  );
+  const playingLine = useMemo(
+    () =>
+      activeLines.reduce<VocalLine | null>(
+        (latest, line) => (!latest || line.startSec >= latest.startSec ? line : latest),
+        null,
+      ),
+    [activeLines],
+  );
   const sortedRows = useMemo(
     () => sortDistributionRows(rows, group.members, sortMode),
     [rows, group.members, sortMode],
   );
   const ticks = useMemo(() => buildTicks(spanSec), [spanSec]);
   const playheadPercent = spanSec > 0 ? clamp(currentTime / spanSec, 0, 1) * 100 : 0;
-  const activeLineId = hoveredLineId ?? selectedLineId;
-  const activeLine = activeLineId ? lineById.get(activeLineId) ?? null : null;
+  const inspectedLineId = hoveredLineId ?? selectedLineId ?? playingLine?.id ?? null;
+  const activeLine = inspectedLineId ? lineById.get(inspectedLineId) ?? null : null;
 
   const handleTrackClick = (event: MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -222,6 +240,7 @@ export function DistributionChart({
           {sortedRows.map((row) => {
             const member = memberById.get(row.memberId);
             if (!member) return null;
+            const isPlaying = activeMemberIds.has(row.memberId);
             const trackHeight =
               row.laneCount > 0
                 ? row.laneCount * (LANE_HEIGHT + LANE_GAP) - LANE_GAP
@@ -234,7 +253,13 @@ export function DistributionChart({
               row.lastSec === null ? null : clamp(row.lastSec / spanSec, 0, 1) * 100;
 
             return (
-              <div className="dist-row" key={row.memberId}>
+              <div
+                className={['dist-row', isPlaying ? 'is-playing' : '']
+                  .filter(Boolean)
+                  .join(' ')}
+                key={row.memberId}
+                style={{ '--member-color': member.color } as CSSProperties}
+              >
                 <div className="dist-member">
                   <Avatar
                     name={member.name}
@@ -244,7 +269,15 @@ export function DistributionChart({
                   />
                   <span className="dist-member-copy">
                     <span className="dist-member-name">
-                      {member.name || 'Unnamed member'}
+                      <span className="dist-member-name-text">
+                        {member.name || 'Unnamed member'}
+                      </span>
+                      {isPlaying ? (
+                        <>
+                          <span className="dist-live-dot" aria-hidden="true" />
+                          <span className="sr-only">singing now</span>
+                        </>
+                      ) : null}
                     </span>
                     <span className="dist-member-sub mono">
                       {row.lineCount} {row.lineCount === 1 ? 'line' : 'lines'}
@@ -274,6 +307,7 @@ export function DistributionChart({
                     {row.segments.map((segment) => {
                       const line = segment.line;
                       const selected = line.id === selectedLineId;
+                      const playing = activeLineIds.has(line.id);
                       const style = {
                         left: `${(line.startSec / spanSec) * 100}%`,
                         width: `${(lineDuration(line) / spanSec) * 100}%`,
@@ -285,9 +319,14 @@ export function DistributionChart({
                         <button
                           key={`${line.id}-${row.memberId}`}
                           type="button"
-                          className={`dist-segment ${
-                            line.kind === 'adlib' ? 'is-adlib' : 'is-sung'
-                          } ${selected ? 'is-selected' : ''}`}
+                          className={[
+                            'dist-segment',
+                            line.kind === 'adlib' ? 'is-adlib' : 'is-sung',
+                            selected ? 'is-selected' : '',
+                            playing ? 'is-playing' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
                           style={style}
                           aria-label={describeLine(line)}
                           aria-pressed={selected}
@@ -382,6 +421,7 @@ export function DistributionChart({
       <footer className="dist-foot">
         <span>Solid = line · outline = ad-lib.</span>
         <span>Every credited member gets the full duration of a shared line.</span>
+        <span>Playback lights up whoever is singing.</span>
         <span>Overlaps stack so ad-libs stay visible.</span>
       </footer>
     </section>

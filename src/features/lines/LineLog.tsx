@@ -6,6 +6,7 @@ import { formatClock } from '../../lib/time';
 interface LineLogProps {
   group: Group;
   lines: VocalLine[];
+  activeLines: VocalLine[];
   selectedLineId: string | null;
   editingLineId: string | null;
   onSelect: (lineId: string) => void;
@@ -17,6 +18,7 @@ interface LineLogProps {
 export function LineLog({
   group,
   lines,
+  activeLines,
   selectedLineId,
   editingLineId,
   onSelect,
@@ -25,6 +27,7 @@ export function LineLog({
   onSeek,
 }: LineLogProps) {
   const memberById = new Map(group.members.map((member) => [member.id, member]));
+  const activeLineIds = new Set(activeLines.map((line) => line.id));
 
   return (
     <section className="panel line-log-panel">
@@ -48,12 +51,18 @@ export function LineLog({
           {lines.map((line) => {
             const selected = line.id === selectedLineId;
             const editing = line.id === editingLineId;
+            const playing = activeLineIds.has(line.id);
             return (
               <article
                 key={line.id}
-                className={`line-log-row ${selected ? 'is-selected' : ''} ${
-                  editing ? 'is-editing' : ''
-                }`}
+                className={[
+                  'line-log-row',
+                  selected ? 'is-selected' : '',
+                  editing ? 'is-editing' : '',
+                  playing ? 'is-playing' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
               >
                 <button
                   type="button"
@@ -65,6 +74,12 @@ export function LineLog({
                   aria-current={selected ? 'true' : undefined}
                 >
                   <span className="line-log-time mono">
+                    {playing ? (
+                      <>
+                        <span className="line-log-live-dot" aria-hidden="true" />
+                        <span className="sr-only">singing now</span>
+                      </>
+                    ) : null}
                     <span>{formatClock(line.startSec, true)}</span>
                     <span className="line-log-arrow">→</span>
                     <span>{formatClock(line.endSec, true)}</span>

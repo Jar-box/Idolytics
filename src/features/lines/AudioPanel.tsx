@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -67,7 +68,7 @@ export function AudioPanel({
   const lengthMismatch =
     duration > 0 && songDuration > 0 && Math.abs(duration - songDuration) >= 1;
 
-  const togglePlayback = async () => {
+  const togglePlayback = useCallback(async () => {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
@@ -79,7 +80,41 @@ export function AudioPanel({
     } else {
       audio.pause();
     }
-  };
+  }, [audioRef]);
+
+  useEffect(() => {
+    if (!audioUrl) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isSpace = event.code === 'Space' || event.key === ' ';
+      if (
+        !isSpace ||
+        event.repeat ||
+        event.isComposing ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.shiftKey ||
+        event.defaultPrevented
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      void togglePlayback();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [audioUrl, togglePlayback]);
 
   const nudge = (delta: number) => {
     const audio = audioRef.current;
@@ -192,8 +227,9 @@ export function AudioPanel({
                 type="button"
                 className="audio-play"
                 onClick={() => void togglePlayback()}
-                title={playing ? 'Pause song audio' : 'Play song audio'}
+                title={playing ? 'Pause song audio (Space)' : 'Play song audio (Space)'}
                 aria-label={playing ? 'Pause song audio' : 'Play song audio'}
+                aria-keyshortcuts="Space"
               >
                 {playing ? <Pause size={17} /> : <Play size={17} />}
               </button>
@@ -286,7 +322,8 @@ export function AudioPanel({
       )}
 
       <p className="audio-note">
-        Audio stays on your device and is never embedded in the workspace. Timestamps are saved.
+        Press Space to play or pause. Audio stays on your device and is never embedded in the
+        workspace. Timestamps are saved.
       </p>
 
       <audio

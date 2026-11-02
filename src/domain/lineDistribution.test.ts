@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildLineDistribution, sortDistributionRows } from './lineDistribution';
+import {
+  buildLineDistribution,
+  linesAtTime,
+  sortDistributionRows,
+} from './lineDistribution';
 import type { Member, Song, VocalLine } from './schema';
 
 function member(id: string): Member {
@@ -137,6 +141,28 @@ describe('buildLineDistribution', () => {
     );
 
     expect(distribution.rows.map((row) => row.memberId)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('linesAtTime', () => {
+  const lines = [
+    line('l1', 10, 20, ['a']),
+    line('l2', 15, 25, ['b'], 'adlib'),
+    line('l3', 30, 35, ['a', 'b']),
+  ];
+
+  it('returns every overlapping line at the playhead', () => {
+    expect(linesAtTime(lines, 12).map((entry) => entry.id)).toEqual(['l1']);
+    expect(linesAtTime(lines, 16).map((entry) => entry.id)).toEqual(['l1', 'l2']);
+    expect(linesAtTime(lines, 31).map((entry) => entry.id)).toEqual(['l3']);
+  });
+
+  it('includes the start and excludes the end', () => {
+    expect(linesAtTime(lines, 10).map((entry) => entry.id)).toEqual(['l1']);
+    expect(linesAtTime(lines, 20).map((entry) => entry.id)).toEqual(['l2']);
+    expect(linesAtTime(lines, 25)).toEqual([]);
+    expect(linesAtTime(lines, 9.999)).toEqual([]);
+    expect(linesAtTime(lines, 35)).toEqual([]);
   });
 });
 

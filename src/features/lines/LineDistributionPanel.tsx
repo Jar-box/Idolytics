@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type RefObject } from 'react';
 import { MicVocal, UserPlus } from 'lucide-react';
 import type { Group, Song } from '../../domain/schema';
-import { buildLineDistribution } from '../../domain/lineDistribution';
+import { buildLineDistribution, linesAtTime } from '../../domain/lineDistribution';
 import { EmptyState } from '../../components/EmptyState';
 import { StatsRow } from '../../components/StatsRow';
 import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
@@ -59,6 +59,10 @@ export function LineDistributionPanel({
   const distribution = useMemo(
     () => buildLineDistribution(song, group.members),
     [song, group.members],
+  );
+  const activeLines = useMemo(
+    () => linesAtTime(song.lines, currentTime),
+    [song.lines, currentTime],
   );
   const memberById = useMemo(
     () => new Map(group.members.map((member) => [member.id, member])),
@@ -181,6 +185,7 @@ export function LineDistributionPanel({
             rows={distribution.rows}
             spanSec={distribution.spanSec}
             currentTime={currentTime}
+            activeLines={activeLines}
             sortMode={sortMode}
             onSortChange={setSortMode}
             selectedLineId={selectedLineId}
@@ -191,6 +196,7 @@ export function LineDistributionPanel({
           <LineLog
             group={group}
             lines={distribution.sortedLines}
+            activeLines={activeLines}
             selectedLineId={selectedLineId}
             editingLineId={editingLineId}
             onSelect={setSelectedLineId}
