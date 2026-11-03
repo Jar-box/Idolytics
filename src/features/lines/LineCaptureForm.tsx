@@ -5,13 +5,15 @@ import {
   type CSSProperties,
   type FormEvent,
 } from 'react';
-import { Check, MicVocal, Sparkles } from 'lucide-react';
+import { Check, MicVocal } from 'lucide-react';
 import type { Group, LineKind, Song, VocalLine } from '../../domain/schema';
 import { Avatar } from '../../components/Avatar';
 import { ClockInput } from '../../components/ClockInput';
 import { roundTo } from '../../lib/time';
 import { useToastStore } from '../../store/toastStore';
 import { useWorkspaceStore } from '../../store/workspaceStore';
+import { lineKindOptions } from './lineKindMeta';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 
 interface LineCaptureFormProps {
   group: Group;
@@ -21,6 +23,7 @@ interface LineCaptureFormProps {
   spanSec: number;
   onSaved: (lineId: string) => void;
   onCancelEdit: () => void;
+  onDelete?: (lineId: string) => void;
 }
 
 const MAX_TIME = 60 * 60 * 12;
@@ -43,10 +46,14 @@ export function LineCaptureForm({
   spanSec,
   onSaved,
   onCancelEdit,
+  onDelete,
 }: LineCaptureFormProps) {
   const addLine = useWorkspaceStore((state) => state.addLine);
   const updateLine = useWorkspaceStore((state) => state.updateLine);
+  const mergeLineIntoExisting = useWorkspaceStore((state) => state.mergeLineIntoExisting);
   const pushToast = useToastStore((state) => state.push);
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const initialStart = draftStartAt(currentTime, spanSec);
   const [start, setStart] = useState(initialStart);
@@ -56,7 +63,9 @@ export function LineCaptureForm({
   const [lyric, setLyric] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{ memberId: string; memberName: string } | null>(null);
   const nextStartRef = useRef<number | null>(null);
+const formRef = useRef<HTMLFormElement>(null);
 
   const resetDraft = (at: number) => {
     const nextStart = draftStartAt(at, spanSec);
@@ -105,12 +114,22 @@ export function LineCaptureForm({
     );
   };
 
-  const duration = Math.max(0, end - start);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      const target = event.target as Element | null;
+      if (target?.closest('textarea')) return;
+      if (target?.closest('#line-capture-form')) return; // native submit handles it
+      formRef.current?.requestSubmit();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const trimmedLyric = lyric.trim();
-    const trimmedNote = note.trim();
 
     if (end <= start) {
       setError('The end time must be after the start time.');
@@ -125,6 +144,34 @@ export function LineCaptureForm({
       return;
     }
 
+    const eps = 1e-6;
+    const prevMembers = new Set(line?.memberIds ?? []);
+    const addedMembers = memberIds.filter((m) => !prevMembers.has(m));
+    if (addedMembers.length > 0) {
+      for (const m of addedMembers) {
+        const hasOverlap = song.lines.some(
+          (l) =>
+            l.id !== line?.id &&
+            l.memberIds.includes(m) &&
+            l.startSec < end - eps &&
+            start < l.endSec + eps,
+        );
+        if (hasOverlap) {
+          const member = group.members.find((gm) => gm.id === m);
+          setConflict({ memberId: m, memberName: member?.name || 'This member' });
+          setError(null);
+          return;
+        }
+      }
+    }
+
+    doSave();
+  };
+
+  const doSave = () => {
+    setConflict(null);
+    const trimmedLyric = lyric.trim();
+    const trimmedNote = note.trim();
     const payload = {
       startSec: start,
       endSec: end,
@@ -133,27 +180,62 @@ export function LineCaptureForm({
       lyric: trimmedLyric || undefined,
       note: trimmedNote || undefined,
     };
-
     if (line) {
       const ok = updateLine(group.id, song.id, line.id, payload);
       if (!ok) {
-        setError('Could not save this line. Check the members and times.');
+        setError('Could not save this part. Check the members and times.');
         return;
       }
       nextStartRef.current = line.endSec;
-      pushToast('Line updated.', 'success');
+      pushToast('Part updated.', 'success');
       onSaved(line.id);
       return;
     }
-
     const id = addLine(group.id, song.id, payload);
     if (!id) {
-      setError('Could not add this line. Check the members and times.');
+      setError('Could not add this part. Check the members and times.');
       return;
     }
-    pushToast('Line added.', 'success');
+    pushToast('Part added.', 'success');
     onSaved(id);
     resetDraft(end);
+  };
+
+  const doMerge = () => {
+    if (!conflict) return;
+    setConflict(null);
+    const trimmedLyric = lyric.trim();
+    const trimmedNote = note.trim();
+    const payload = {
+      startSec: start,
+      endSec: end,
+      memberIds,
+      kind,
+      lyric: trimmedLyric || undefined,
+      note: trimmedNote || undefined,
+    };
+    const ok = mergeLineIntoExisting(group.id, song.id, line?.id ?? null, payload, conflict.memberId);
+    if (!ok) {
+      setError('Could not merge this part. Check the members and times.');
+      return;
+    }
+    pushToast('Merged into existing line.', 'success');
+    if (line) {
+      onSaved(line.id);
+      onCancelEdit();
+    } else {
+      onSaved('');
+      resetDraft(end);
+    }
+  };
+
+  const duration = Math.max(0, end - start);
+
+  const doDelete = () => {
+    if (!line || !onDelete) return;
+    setConfirmDelete(false);
+    onDelete(line.id);
+    onCancelEdit();
   };
 
   return (
@@ -161,18 +243,27 @@ export function LineCaptureForm({
       <header className="panel-header line-capture-header">
         <div>
           <p className="eyebrow">{line ? 'Editing logged part' : 'New vocal part'}</p>
-          <h2>{line ? 'Edit line' : 'Capture a line'}</h2>
+          <h2>{line ? 'Edit part' : 'Capture a part'}</h2>
         </div>
         {line ? (
-          <button type="button" className="btn btn-ghost btn-small" onClick={onCancelEdit}>
-            Cancel
-          </button>
+          <>
+            <button type="button" className="btn btn-ghost btn-small" onClick={onCancelEdit}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete part
+            </button>
+          </>
         ) : (
           <span className="panel-meta mono">{duration.toFixed(1)}s</span>
         )}
       </header>
 
-      <form id="line-capture-form" className="line-capture-form" onSubmit={handleSubmit}>
+      <form ref={formRef} id="line-capture-form" className="line-capture-form" onSubmit={handleSubmit}>
         <div className="form-grid-2">
           <ClockInput
             label="Start"
@@ -193,25 +284,29 @@ export function LineCaptureForm({
         <div className="field">
           <span className="field-label">Part type</span>
           <div className="line-kind-toggle" role="group" aria-label="Vocal part type">
-            <button
-              type="button"
-              className={`line-kind-option ${kind === 'sung' ? 'is-active' : ''}`}
-              aria-pressed={kind === 'sung'}
-              onClick={() => setKind('sung')}
-            >
-              <MicVocal size={14} />
-              Line
-            </button>
-            <button
-              type="button"
-              className={`line-kind-option ${kind === 'adlib' ? 'is-active' : ''}`}
-              aria-pressed={kind === 'adlib'}
-              onClick={() => setKind('adlib')}
-            >
-              <Sparkles size={14} />
-              Ad-lib
-            </button>
+            {lineKindOptions.map(({ kind: optionKind, label, className, icon: Icon }) => (
+              <button
+                key={optionKind}
+                type="button"
+                className={[
+                  'line-kind-option',
+                  className,
+                  kind === optionKind ? 'is-active' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                aria-pressed={kind === optionKind}
+                onClick={() => setKind(optionKind)}
+              >
+                <Icon size={14} />
+                {label}
+              </button>
+            ))}
           </div>
+          <span className="field-hint">
+            One technique per part. If the delivery changes mid-line, split it into adjacent
+            parts.
+          </span>
         </div>
 
         <div className="field">
@@ -274,7 +369,7 @@ export function LineCaptureForm({
             className="input line-note-input"
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            placeholder="Harmony, ad-lib run, double-tracked…"
+            placeholder="Harmony, ad-lib run, high note, double-tracked…"
             maxLength={300}
             rows={2}
           />
@@ -282,26 +377,50 @@ export function LineCaptureForm({
 
         {end > song.durationSec && song.durationSec > 0 ? (
           <p className="form-warning">
-            This line ends past the saved song length. The chart will extend to fit it.
+            This part ends past the saved song length. The chart will extend to fit it.
           </p>
         ) : null}
 
-        {error ? <p className="form-error">{error}</p> : null}
+      {error ? <p className="form-error">{error}</p> : null}
 
-        <button type="submit" className="btn btn-primary line-save-button">
-          {line ? (
-            <>
-              <Check size={15} />
-              Save line
-            </>
-          ) : (
-            <>
-              <MicVocal size={15} />
-              Add line
-            </>
-          )}
-        </button>
-      </form>
-    </section>
+      <button type="submit" className="btn btn-primary line-save-button">
+        {line ? (
+          <>
+            <Check size={15} />
+            Save part
+          </>
+        ) : (
+          <>
+            <MicVocal size={15} />
+            Add part
+          </>
+        )}
+      </button>
+    </form>
+
+      <ConfirmDialog
+        open={conflict !== null}
+        title="Line conflict"
+        message={
+          conflict
+            ? `${conflict.memberName} already has a line at this time. Keep both lines (overlapping), or cut ${conflict.memberName}'s line so this part becomes shared with them?`
+            : ''
+        }
+        confirmLabel="Cut & share"
+        cancelLabel="Keep both (overlapping)"
+        onConfirm={doMerge}
+        onCancel={doSave}
+      />
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete part"
+        message="Delete this part? This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        tone="danger"
+        onConfirm={doDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
+  </section>
   );
 }

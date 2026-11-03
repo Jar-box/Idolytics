@@ -7,16 +7,16 @@ export function roundTo(value: number, decimals = 1): number {
   return Math.round(value * factor) / factor;
 }
 
-export function formatClock(seconds: number, showTenths = false): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return showTenths ? '0:00.0' : '0:00';
+export function formatClock(seconds: number, showMs = false): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return showMs ? '0:00.000' : '0:00';
   const whole = Math.floor(seconds);
   const hours = Math.floor(whole / 3600);
   const minutes = Math.floor((whole % 3600) / 60);
   const secs = whole % 60;
-  const tenths = Math.floor((seconds - whole) * 10);
+  const ms = Math.min(999, Math.round((seconds - whole) * 1000));
   const base = `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   const withHours = hours > 0 ? `${hours}:${base}` : base;
-  return showTenths ? `${withHours}.${tenths}` : withHours;
+  return showMs ? `${withHours}.${String(ms).padStart(3, '0')}` : withHours;
 }
 
 export function parseClock(input: string): number | null {

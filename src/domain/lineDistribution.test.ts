@@ -4,7 +4,7 @@ import {
   linesAtTime,
   sortDistributionRows,
 } from './lineDistribution';
-import type { Member, Song, VocalLine } from './schema';
+import type { LineKind, Member, Song, VocalLine } from './schema';
 
 function member(id: string): Member {
   return { id, name: id, face: null, color: '#d7ff3f' };
@@ -15,7 +15,7 @@ function line(
   startSec: number,
   endSec: number,
   memberIds: string[],
-  kind: 'sung' | 'adlib' = 'sung',
+  kind: LineKind = 'sung',
   extra: Pick<VocalLine, 'lyric' | 'note'> = {},
 ): VocalLine {
   return { id, startSec, endSec, memberIds, kind, ...extra };
@@ -77,10 +77,66 @@ describe('buildLineDistribution', () => {
 
     expect(distribution.rows[0].totalSeconds).toBe(16);
     expect(distribution.rows[0].lineCount).toBe(2);
-    expect(distribution.rows[0].adlibCount).toBe(1);
+    expect(distribution.rows[0].kindCounts).toEqual({
+      sung: 1,
+      adlib: 1,
+      rap: 0,
+      highnote: 0,
+    });
     expect(distribution.rows[0].laneCount).toBe(2);
     expect(distribution.rows[0].segments.map((segment) => segment.lane)).toEqual([0, 1]);
-    expect(distribution.adlibCount).toBe(1);
+    expect(distribution.kindCounts).toEqual({
+      sung: 1,
+      adlib: 1,
+      rap: 0,
+      highnote: 0,
+    });
+  });
+
+  it('counts every part kind independently', () => {
+    const distribution = buildLineDistribution(
+      song([
+        line('l1', 10, 20, ['a'], 'sung'),
+        line('l2', 20, 25, ['a'], 'adlib'),
+        line('l3', 25, 30, ['a'], 'rap'),
+        line('l4', 30, 35, ['a'], 'highnote'),
+      ]),
+      [member('a')],
+    );
+
+    expect(distribution.rows[0].kindCounts).toEqual({
+      sung: 1,
+      adlib: 1,
+      rap: 1,
+      highnote: 1,
+    });
+    expect(distribution.kindCounts).toEqual({
+      sung: 1,
+      adlib: 1,
+      rap: 1,
+      highnote: 1,
+    });
+    expect(distribution.rows[0].totalSeconds).toBe(25);
+  });
+
+  it('keeps a sung-to-high-note switch adjacent without double counting', () => {
+    const distribution = buildLineDistribution(
+      song([
+        line('l1', 10, 20, ['a'], 'sung'),
+        line('l2', 20, 24, ['a'], 'highnote'),
+      ]),
+      [member('a')],
+    );
+
+    expect(distribution.rows[0].totalSeconds).toBe(14);
+    expect(distribution.rows[0].laneCount).toBe(1);
+    expect(distribution.rows[0].segments.map((segment) => segment.lane)).toEqual([0, 0]);
+    expect(distribution.kindCounts).toEqual({
+      sung: 1,
+      adlib: 0,
+      rap: 0,
+      highnote: 1,
+    });
   });
 
   it('reuses a lane for non-overlapping blocks', () => {

@@ -49,6 +49,7 @@ export function LineDistributionPanel({
   onImportAudioUrl,
 }: LineDistributionPanelProps) {
   const deleteLine = useWorkspaceStore((state) => state.deleteLine);
+  const updateLine = useWorkspaceStore((state) => state.updateLine);
   const goGroup = useNavStore((state) => state.goGroup);
   const pushToast = useToastStore((state) => state.push);
 
@@ -110,8 +111,46 @@ export function LineDistributionPanel({
     deleteLine(group.id, song.id, lineId);
     setSelectedLineId((current) => (current === lineId ? null : current));
     setEditingLineId((current) => (current === lineId ? null : current));
-    pushToast('Line deleted.', 'success');
+    pushToast('Part deleted.', 'success');
   };
+
+  const handleSelectLine = (lineId: string) => {
+    setSelectedLineId(lineId);
+    setEditingLineId(lineId);
+  };
+
+  const handleMoveLine = (lineId: string, startSec: number, endSec: number) => {
+    const ok = updateLine(group.id, song.id, lineId, { startSec, endSec });
+    if (ok) pushToast('Part moved.', 'success');
+  };
+
+  useEffect(() => {
+    if (!editingLineId) return;
+
+    const handleClick = (event: MouseEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+        return;
+      }
+      const target = event.target as Element | null;
+      if (target?.closest('.dist-segment, .line-log-row, .line-capture-panel, .audio-panel')) {
+        return;
+      }
+      setEditingLineId(null);
+    };
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setEditingLineId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKeydown);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKeydown);
+    };
+  }, [editingLineId, pushToast]);
 
   if (group.members.length === 0) {
     return (
@@ -120,7 +159,7 @@ export function LineDistributionPanel({
           <EmptyState
             icon={<UserPlus size={28} />}
             eyebrow="Roster required"
-            title="Add members before logging lines"
+            title="Add members before logging parts"
             message="Line distribution needs a roster to assign each part. Build the group first, then come back."
             action={
               <button
@@ -146,20 +185,22 @@ export function LineDistributionPanel({
             value: formatClock(distribution.totalMemberSeconds),
             hint:
               distribution.lineCount > 0
-                ? `${distribution.lineCount} ${distribution.lineCount === 1 ? 'line' : 'lines'} logged`
-                : 'No lines logged yet',
+                ? `${distribution.lineCount} ${
+                    distribution.lineCount === 1 ? 'part' : 'parts'
+                  } logged`
+                : 'No parts logged yet',
             accent: true,
           },
           {
-            label: 'Unique line time',
+            label: 'Unique part time',
             value: formatClock(distribution.totalUniqueSeconds),
             hint: `${formatClock(distribution.spanSec)} timeline`,
           },
           {
             label: 'Ad-libs',
-            value: String(distribution.adlibCount).padStart(2, '0'),
+            value: String(distribution.kindCounts.adlib).padStart(2, '0'),
             hint:
-              distribution.adlibCount > 0
+              distribution.kindCounts.adlib > 0
                 ? 'Included in totals'
                 : 'No ad-libs logged',
           },
@@ -172,7 +213,7 @@ export function LineDistributionPanel({
             hint:
               leader && leaderMember && leader.totalSeconds > 0
                 ? `${leaderMember.name || 'Unnamed member'} · ${formatPercent(leader.share)}`
-                : 'Log a line to begin',
+                : 'Log a part to begin',
           },
         ]}
       />
@@ -186,11 +227,13 @@ export function LineDistributionPanel({
             spanSec={distribution.spanSec}
             currentTime={currentTime}
             activeLines={activeLines}
+            kindCounts={distribution.kindCounts}
             sortMode={sortMode}
             onSortChange={setSortMode}
             selectedLineId={selectedLineId}
-            onSelectLine={setSelectedLineId}
+            onSelectLine={handleSelectLine}
             onSeek={seek}
+            onMoveLine={handleMoveLine}
           />
 
           <LineLog
@@ -199,7 +242,7 @@ export function LineDistributionPanel({
             activeLines={activeLines}
             selectedLineId={selectedLineId}
             editingLineId={editingLineId}
-            onSelect={setSelectedLineId}
+            onSelect={handleSelectLine}
             onEdit={(line) => {
               setEditingLineId(line.id);
               setSelectedLineId(line.id);
@@ -210,23 +253,6 @@ export function LineDistributionPanel({
         </div>
 
         <aside className="line-sidebar">
-          <AudioPanel
-            fileName={song.audioFileName}
-            audioUrl={audioUrl}
-            audioRef={audioRef}
-            currentTime={currentTime}
-            initialTime={currentTime}
-            songDuration={song.durationSec}
-            mediaResolving={audioResolving}
-            mediaSource={audioSource}
-            copyState={audioCopyState}
-            onTimeUpdate={onTimeUpdate}
-            onFile={onAudioFile}
-            onUseTrackDuration={onUseTrackDuration}
-            onRetryCopy={onRetryAudioCopy}
-            onImportUrl={onImportAudioUrl}
-          />
-
           <LineCaptureForm
             group={group}
             song={song}
@@ -238,16 +264,36 @@ export function LineDistributionPanel({
               setEditingLineId(null);
             }}
             onCancelEdit={() => setEditingLineId(null)}
+            onDelete={handleDeleteLine}
           />
         </aside>
       </div>
+
+      <section className="audio-player-bottom">
+        <AudioPanel
+          fileName={song.audioFileName}
+          audioUrl={audioUrl}
+          audioRef={audioRef}
+          currentTime={currentTime}
+          initialTime={currentTime}
+          songDuration={song.durationSec}
+          mediaResolving={audioResolving}
+          mediaSource={audioSource}
+          copyState={audioCopyState}
+          onTimeUpdate={onTimeUpdate}
+          onFile={onAudioFile}
+          onUseTrackDuration={onUseTrackDuration}
+          onRetryCopy={onRetryAudioCopy}
+          onImportUrl={onImportAudioUrl}
+        />
+      </section>
 
       {distribution.lineCount === 0 ? (
         <p className="line-first-hint">
           <MicVocal size={15} />
           {audioUrl
-            ? 'Play the song audio, mark a start and end, pick who sings it, and save the first line.'
-            : 'Link the song audio in the sidebar, mark a start and end, pick who sings it, and save the first line.'}
+            ? 'Play the song audio, mark a start and end, pick who sings it, and save the first part.'
+            : 'Link the song audio in the sidebar, mark a start and end, pick who sings it, and save the first part.'}
         </p>
       ) : null}
     </div>

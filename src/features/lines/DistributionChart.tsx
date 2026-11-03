@@ -1,20 +1,32 @@
 import {
+  useCallback,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type MouseEvent,
+  type WheelEvent,
 } from 'react';
 import type { Group, Song, VocalLine } from '../../domain/schema';
 import {
   lineDuration,
   sortDistributionRows,
+  type LineKindCounts,
   type MemberDistribution,
 } from '../../domain/lineDistribution';
 import { Avatar } from '../../components/Avatar';
 import { clamp, formatClock, formatPercent } from '../../lib/time';
+import { formatKindCount, lineKindMeta, lineKindOptions } from './lineKindMeta';
 
 const LANE_HEIGHT = 15;
 const LANE_GAP = 3;
+
+const DRAG_THRESHOLD_PX = 2;
+const SNAP_PX = 12;
+
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.1;
 
 export type DistributionSortMode = 'time' | 'roster' | 'average';
 
@@ -25,11 +37,13 @@ interface DistributionChartProps {
   spanSec: number;
   currentTime: number;
   activeLines: VocalLine[];
+  kindCounts: LineKindCounts;
   sortMode: DistributionSortMode;
   onSortChange: (mode: DistributionSortMode) => void;
   selectedLineId: string | null;
   onSelectLine: (lineId: string) => void;
   onSeek: (time: number) => void;
+  onMoveLine?: (lineId: string, startSec: number, endSec: number) => void;
 }
 
 function tickStep(spanSec: number): number {
@@ -59,13 +73,35 @@ export function DistributionChart({
   spanSec,
   currentTime,
   activeLines,
+  kindCounts,
   sortMode,
   onSortChange,
   selectedLineId,
   onSelectLine,
   onSeek,
+  onMoveLine,
 }: DistributionChartProps) {
   const [hoveredLineId, setHoveredLineId] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<{
+    lineId: string;
+    memberId: string;
+    mode: 'move' | 'start' | 'end';
+    startSec: number;
+    endSec: number;
+    snapTarget?: number | null;
+  } | null>(null);
+  const dragOrigin = useRef<{
+    lineId: string;
+    memberId: string;
+    mode: 'move' | 'start' | 'end';
+    originStart: number;
+    originEnd: number;
+    originX: number;
+    secPerPx: number;
+  } | null>(null);
+  const dragCurrent = useRef<{ startSec: number; endSec: number } | null>(null);
+  const didDragRef = useRef(false);
+  const [zoom, setZoom] = useState(1);
 
   const memberById = useMemo(
     () => new Map(group.members.map((member) => [member.id, member])),
@@ -96,9 +132,126 @@ export function DistributionChart({
     [rows, group.members, sortMode],
   );
   const ticks = useMemo(() => buildTicks(spanSec), [spanSec]);
+
+  const segmentBoundaries = useCallback(
+    (excludeLineId: string): number[] =>
+      sortedRows.flatMap((row) =>
+        row.segments.flatMap((segment) =>
+          segment.line.id === excludeLineId ? [] : [segment.line.startSec, segment.line.endSec],
+        ),
+      ),
+    [sortedRows],
+  );
+
+  const snapValue = useCallback(
+    (value: number, candidates: number[], thresholdSec: number): number => {
+      let best = value;
+      let bestDist = thresholdSec;
+      for (const candidate of candidates) {
+        const dist = Math.abs(candidate - value);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = candidate;
+        }
+      }
+      return best;
+    },
+    [],
+  );
+
+  const beginDrag = useCallback(
+    (event: MouseEvent, row: MemberDistribution, line: VocalLine, mode: 'move' | 'start' | 'end') => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      didDragRef.current = false;
+      dragCurrent.current = null;
+
+      const button = event.currentTarget as HTMLElement;
+      const track = (button.offsetParent as HTMLElement | null)?.offsetParent;
+      const rect = track?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+
+      dragOrigin.current = {
+        lineId: line.id,
+        memberId: row.memberId,
+        mode,
+        originStart: line.startSec,
+        originEnd: line.endSec,
+        originX: event.clientX,
+        secPerPx: spanSec / rect.width,
+      };
+
+      const minDuration = 0.05;
+
+      const onMove = (moveEvent: MouseEvent) => {
+        const origin = dragOrigin.current;
+        if (!origin) return;
+        const deltaSec = (moveEvent.clientX - origin.originX) * origin.secPerPx;
+        const neighbors = segmentBoundaries(origin.lineId);
+        const snapThreshold = SNAP_PX * origin.secPerPx;
+        let startSec = origin.originStart;
+        let endSec = origin.originEnd;
+        let snapTarget: number | null = null;
+
+        if (origin.mode === 'move') {
+          const duration = origin.originEnd - origin.originStart;
+          startSec = clamp(origin.originStart + deltaSec, 0, spanSec - duration);
+          endSec = startSec + duration;
+        } else if (origin.mode === 'start') {
+          startSec = clamp(origin.originStart + deltaSec, 0, origin.originEnd - minDuration);
+          const snapped = snapValue(startSec, [0, ...neighbors], snapThreshold);
+          if (Math.abs(snapped - startSec) < snapThreshold + 1e-9) {
+            snapTarget = snapped;
+            startSec = snapped;
+          }
+          startSec = clamp(startSec, 0, origin.originEnd - minDuration);
+        } else {
+          endSec = clamp(origin.originEnd + deltaSec, origin.originStart + minDuration, spanSec);
+          const snapped = snapValue(endSec, [...neighbors, spanSec], snapThreshold);
+          if (Math.abs(snapped - endSec) < snapThreshold + 1e-9) {
+            snapTarget = snapped;
+            endSec = snapped;
+          }
+          endSec = clamp(endSec, origin.originStart + minDuration, spanSec);
+        }
+
+        dragCurrent.current = { startSec, endSec };
+
+        if (!didDragRef.current && Math.abs(moveEvent.clientX - origin.originX) > DRAG_THRESHOLD_PX) {
+          didDragRef.current = true;
+          setDragging({ lineId: origin.lineId, memberId: origin.memberId, mode: origin.mode, startSec, endSec, snapTarget });
+        } else if (didDragRef.current) {
+          setDragging({ lineId: origin.lineId, memberId: origin.memberId, mode: origin.mode, startSec, endSec, snapTarget });
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove as unknown as EventListener);
+        window.removeEventListener('mouseup', onUp as unknown as EventListener);
+        const origin = dragOrigin.current;
+        const current = dragCurrent.current;
+        dragOrigin.current = null;
+        dragCurrent.current = null;
+        setDragging(null);
+        if (!current || !origin || !didDragRef.current) return;
+        const changed =
+          current.startSec !== origin.originStart || current.endSec !== origin.originEnd;
+        if (changed) {
+          onMoveLine?.(origin.lineId, current.startSec, current.endSec);
+        }
+      };
+
+      window.addEventListener('mousemove', onMove as unknown as EventListener);
+      window.addEventListener('mouseup', onUp as unknown as EventListener, { once: true });
+    },
+    [spanSec, segmentBoundaries, snapValue, onMoveLine],
+  );
+
   const playheadPercent = spanSec > 0 ? clamp(currentTime / spanSec, 0, 1) * 100 : 0;
   const inspectedLineId = hoveredLineId ?? selectedLineId ?? playingLine?.id ?? null;
   const activeLine = inspectedLineId ? lineById.get(inspectedLineId) ?? null : null;
+  const activeLineMeta = activeLine ? lineKindMeta[activeLine.kind] : null;
 
   const handleTrackClick = (event: MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -107,11 +260,40 @@ export function DistributionChart({
     onSeek(ratio * spanSec);
   };
 
+  const handleWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const delta = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+        setZoom((current) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta)));
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const delta = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+      setZoom((current) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta)));
+    },
+    [],
+  );
+
+  const handleZoomIn = useCallback(() => {
+    setZoom((current) => Math.min(ZOOM_MAX, current + ZOOM_STEP));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setZoom((current) => Math.max(ZOOM_MIN, current - ZOOM_STEP));
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    setZoom(1);
+  }, []);
+
   const describeLine = (line: VocalLine): string => {
     const names = line.memberIds
       .map((memberId) => memberById.get(memberId)?.name || 'Unknown member')
       .join(', ');
-    const base = `${line.kind === 'adlib' ? 'Ad-lib' : 'Line'} from ${formatClock(
+    const base = `${lineKindMeta[line.kind].label} from ${formatClock(
       line.startSec,
       true,
     )} to ${formatClock(line.endSec, true)}. ${names}.`;
@@ -127,9 +309,40 @@ export function DistributionChart({
         </div>
         <div className="dist-header-tools">
           <span className="panel-meta mono">
-            {song.lines.length} {song.lines.length === 1 ? 'LINE' : 'LINES'} ·{' '}
+            {song.lines.length} {song.lines.length === 1 ? 'PART' : 'PARTS'} ·{' '}
             {formatClock(spanSec)}
           </span>
+          <div className="dist-zoom">
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={handleZoomOut}
+              title="Zoom out"
+              aria-label="Zoom out"
+              disabled={zoom <= ZOOM_MIN}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={handleZoomReset}
+              title="Reset zoom"
+              aria-label="Reset zoom"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={handleZoomIn}
+              title="Zoom in"
+              aria-label="Zoom in"
+              disabled={zoom >= ZOOM_MAX}
+            >
+              +
+            </button>
+          </div>
           <label className="dist-sort">
             <span className="sr-only">Sort members</span>
             <select
@@ -146,14 +359,13 @@ export function DistributionChart({
       </header>
 
       <div className="dist-legend">
-        <span className="dist-legend-item">
-          <span className="dist-legend-swatch is-sung" aria-hidden="true" />
-          Line
-        </span>
-        <span className="dist-legend-item">
-          <span className="dist-legend-swatch is-adlib" aria-hidden="true" />
-          Ad-lib
-        </span>
+        {lineKindOptions.map(({ kind, label, className }) => (
+          <span key={kind} className="dist-legend-item">
+            <span className={`dist-legend-swatch ${className}`} aria-hidden="true" />
+            {label}
+            <span className="dist-legend-count mono">{kindCounts[kind]}</span>
+          </span>
+        ))}
         <span className="dist-legend-item">
           <span className="dist-legend-swatch is-average" aria-hidden="true" />
           Average position
@@ -165,14 +377,10 @@ export function DistributionChart({
       </div>
 
       <div className="dist-readout" aria-live="polite">
-        {activeLine ? (
+        {activeLine && activeLineMeta ? (
           <>
-            <span
-              className={`line-kind-badge ${
-                activeLine.kind === 'adlib' ? 'is-adlib' : 'is-sung'
-              }`}
-            >
-              {activeLine.kind === 'adlib' ? 'Ad-lib' : 'Line'}
+            <span className={`line-kind-badge ${activeLineMeta.className}`}>
+              {activeLineMeta.label}
             </span>
             <span className="dist-readout-time mono">
               {formatClock(activeLine.startSec, true)} – {formatClock(activeLine.endSec, true)}
@@ -213,8 +421,12 @@ export function DistributionChart({
         )}
       </div>
 
-      <div className="dist-scroll">
-        <div className="dist-chart">
+      <div
+        className="dist-scroll"
+        onWheel={handleWheel}
+        style={{ touchAction: 'pan-x pinch-zoom', overscrollBehaviorX: 'contain', overscrollBehaviorY: 'contain' }}
+      >
+        <div className="dist-chart" style={{ minWidth: `${760 * zoom}px` }}>
           <div className="dist-axis" aria-hidden="true">
             <span className="dist-axis-label">Member</span>
             <div className="dist-axis-track">
@@ -241,6 +453,13 @@ export function DistributionChart({
             const member = memberById.get(row.memberId);
             if (!member) return null;
             const isPlaying = activeMemberIds.has(row.memberId);
+            const kindBreakdown = lineKindOptions
+              .filter(({ kind }) => kind !== 'sung' && row.kindCounts[kind] > 0)
+              .map(({ kind }) => formatKindCount(kind, row.kindCounts[kind]))
+              .join(' · ');
+            const kindTitle = lineKindOptions
+              .map(({ kind, label }) => `${label} ${row.kindCounts[kind]}`)
+              .join(' · ');
             const trackHeight =
               row.laneCount > 0
                 ? row.laneCount * (LANE_HEIGHT + LANE_GAP) - LANE_GAP
@@ -279,9 +498,9 @@ export function DistributionChart({
                         </>
                       ) : null}
                     </span>
-                    <span className="dist-member-sub mono">
-                      {row.lineCount} {row.lineCount === 1 ? 'line' : 'lines'}
-                      {row.adlibCount > 0 ? ` · ${row.adlibCount} ad-lib` : ''}
+                    <span className="dist-member-sub mono" title={kindTitle}>
+                      {row.lineCount} {row.lineCount === 1 ? 'part' : 'parts'}
+                      {kindBreakdown ? ` · ${kindBreakdown}` : ''}
                     </span>
                   </span>
                 </div>
@@ -308,47 +527,100 @@ export function DistributionChart({
                       const line = segment.line;
                       const selected = line.id === selectedLineId;
                       const playing = activeLineIds.has(line.id);
+                      const kindMeta = lineKindMeta[line.kind];
+                      const dragged = dragging?.lineId === line.id ? dragging : null;
+                      const renderStart = dragged ? dragged.startSec : line.startSec;
+                      const renderEnd = dragged ? dragged.endSec : line.endSec;
+                      const eps = 1e-6;
+                      const adjacentLeft = row.segments.some(
+                        (other) =>
+                          other.line.id !== line.id &&
+                          Math.abs(other.line.endSec - line.startSec) < eps,
+                      );
+                      const adjacentRight = row.segments.some(
+                        (other) =>
+                          other.line.id !== line.id &&
+                          Math.abs(other.line.startSec - line.endSec) < eps,
+                      );
                       const style = {
-                        left: `${(line.startSec / spanSec) * 100}%`,
-                        width: `${(lineDuration(line) / spanSec) * 100}%`,
+                        left: `${(renderStart / spanSec) * 100}%`,
+                        width: `${((renderEnd - renderStart) / spanSec) * 100}%`,
                         top: `${segment.lane * (LANE_HEIGHT + LANE_GAP)}px`,
                         height: `${LANE_HEIGHT}px`,
                         '--member-color': member.color,
                       } as CSSProperties;
                       return (
-                        <button
-                          key={`${line.id}-${row.memberId}`}
-                          type="button"
-                          className={[
-                            'dist-segment',
-                            line.kind === 'adlib' ? 'is-adlib' : 'is-sung',
-                            selected ? 'is-selected' : '',
-                            playing ? 'is-playing' : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}
-                          style={style}
-                          aria-label={describeLine(line)}
-                          aria-pressed={selected}
-                          title={`${formatClock(line.startSec, true)} – ${formatClock(
-                            line.endSec,
-                            true,
-                          )} · ${line.memberIds
-                            .map(
-                              (memberId) =>
-                                memberById.get(memberId)?.name || 'Unknown member',
-                            )
-                            .join(', ')}`}
-                          onMouseEnter={() => setHoveredLineId(line.id)}
-                          onMouseLeave={() => setHoveredLineId(null)}
-                          onFocus={() => setHoveredLineId(line.id)}
-                          onBlur={() => setHoveredLineId(null)}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSelectLine(line.id);
-                            onSeek(line.startSec);
-                          }}
-                        />
+                        <>
+                          <button
+                            key={`${line.id}-${row.memberId}`}
+                            type="button"
+                            className={[
+                              'dist-segment',
+                              kindMeta.className,
+                              selected ? 'is-selected' : '',
+                              playing ? 'is-playing' : '',
+                              adjacentLeft ? 'is-adjacent-left' : '',
+                              adjacentRight ? 'is-adjacent-right' : '',
+                              dragged ? 'is-dragging' : '',
+                              dragged?.mode === 'start' ? 'is-dragging-start' : '',
+                              dragged?.mode === 'end' ? 'is-dragging-end' : '',
+                              dragged?.mode === 'move' ? 'is-dragging-move' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            style={style}
+                            aria-label={describeLine(line)}
+                            aria-pressed={selected}
+                            title={`${formatClock(line.startSec, true)} – ${formatClock(
+                              line.endSec,
+                              true,
+                            )} · ${line.memberIds
+                              .map(
+                                (memberId) =>
+                                  memberById.get(memberId)?.name || 'Unknown member',
+                              )
+                              .join(', ')}`}
+                            onMouseEnter={() => setHoveredLineId(line.id)}
+                            onMouseLeave={() => setHoveredLineId(null)}
+                            onFocus={() => setHoveredLineId(line.id)}
+                            onBlur={() => setHoveredLineId(null)}
+                            onMouseDown={(event) => beginDrag(event, row, line, 'move')}
+                            onClick={(event) => {
+                              if (didDragRef.current) {
+                                didDragRef.current = false;
+                                return;
+                              }
+                              event.stopPropagation();
+                              onSelectLine(line.id);
+                              if (!event.ctrlKey && !event.metaKey) {
+                                onSeek(line.startSec);
+                              }
+                            }}
+                          >
+                            <span
+                              className="dist-segment-handle dist-segment-handle--start"
+                              aria-label="Resize start"
+                              onMouseDown={(event) => beginDrag(event, row, line, 'start')}
+                              onClick={(event) => event.stopPropagation()}
+                            />
+                            <span
+                              className="dist-segment-handle dist-segment-handle--end"
+                              aria-label="Resize end"
+                              onMouseDown={(event) => beginDrag(event, row, line, 'end')}
+                              onClick={(event) => event.stopPropagation()}
+                            />
+                          </button>
+                          {dragged?.snapTarget !== undefined && dragged?.snapTarget !== null && (dragged.mode === 'start' || dragged.mode === 'end') ? (
+                            <span
+                              className="dist-snap-guide"
+                              style={{
+                                left: `${(dragged.snapTarget / spanSec) * 100}%`,
+                                top: '0',
+                                bottom: '0',
+                              }}
+                            />
+                          ) : null}
+                        </>
                       );
                     })}
                   </div>
@@ -419,10 +691,10 @@ export function DistributionChart({
       </div>
 
       <footer className="dist-foot">
-        <span>Solid = line · outline = ad-lib.</span>
-        <span>Every credited member gets the full duration of a shared line.</span>
+        <span>Solid = line · outline = ad-lib · hatch = rap · shine = high note.</span>
+        <span>Every credited member gets the full duration of a shared part.</span>
         <span>Playback lights up whoever is singing.</span>
-        <span>Overlaps stack so ad-libs stay visible.</span>
+        <span>Overlaps stack so layered parts stay visible.</span>
       </footer>
     </section>
   );

@@ -53,6 +53,8 @@ export function ClockInput({
             if (event.key === 'Enter') {
               event.preventDefault();
               commit();
+              const form = (event.currentTarget as HTMLElement).closest('form');
+              if (form) setTimeout(() => form.requestSubmit(), 0);
             }
           }}
           inputMode="decimal"
@@ -73,7 +75,7 @@ export function ClockInput({
           </button>
         ) : null}
       </span>
-      {invalid ? <span className="field-error">Use m:ss or seconds.</span> : null}
+      {invalid ? <span className="field-error">Use m:ss.ms or seconds.</span> : null}
       {!invalid && hint ? (
         <span className="field-hint" id={`${label}-hint`}>
           {hint}

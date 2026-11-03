@@ -1,6 +1,20 @@
-import type { Member, Song, VocalLine } from './schema';
+import {
+  LINE_KINDS,
+  type LineKind,
+  type Member,
+  type Song,
+  type VocalLine,
+} from './schema';
 
 const EPSILON = 1e-6;
+
+export type LineKindCounts = Record<LineKind, number>;
+
+function emptyKindCounts(): LineKindCounts {
+  const counts = {} as LineKindCounts;
+  for (const kind of LINE_KINDS) counts[kind] = 0;
+  return counts;
+}
 
 export interface DistributionSegment {
   line: VocalLine;
@@ -12,7 +26,7 @@ export interface MemberDistribution {
   totalSeconds: number;
   share: number;
   lineCount: number;
-  adlibCount: number;
+  kindCounts: LineKindCounts;
   firstSec: number | null;
   lastSec: number | null;
   averageSec: number | null;
@@ -27,7 +41,7 @@ export interface LineDistribution {
   totalUniqueSeconds: number;
   totalMemberSeconds: number;
   lineCount: number;
-  adlibCount: number;
+  kindCounts: LineKindCounts;
 }
 
 export function lineDuration(line: VocalLine): number {
@@ -71,7 +85,7 @@ export function buildLineDistribution(song: Song, members: Member[]): LineDistri
       totalSeconds: 0,
       share: 0,
       lineCount: 0,
-      adlibCount: 0,
+      kindCounts: emptyKindCounts(),
       firstSec: null,
       lastSec: null,
       averageSec: null,
@@ -81,9 +95,11 @@ export function buildLineDistribution(song: Song, members: Member[]): LineDistri
   });
 
   const sortedLines = sortLines(song.lines);
+  const kindCounts = emptyKindCounts();
   let totalUniqueSeconds = 0;
 
   for (const line of sortedLines) {
+    kindCounts[line.kind] += 1;
     const duration = lineDuration(line);
     if (duration <= 0) continue;
     totalUniqueSeconds += duration;
@@ -97,7 +113,7 @@ export function buildLineDistribution(song: Song, members: Member[]): LineDistri
       row.segments.push({ line, lane: 0 });
       row.totalSeconds += duration;
       row.lineCount += 1;
-      if (line.kind === 'adlib') row.adlibCount += 1;
+      row.kindCounts[line.kind] += 1;
       row.firstSec =
         row.firstSec === null ? line.startSec : Math.min(row.firstSec, line.startSec);
       row.lastSec = row.lastSec === null ? line.endSec : Math.max(row.lastSec, line.endSec);
@@ -158,7 +174,7 @@ export function buildLineDistribution(song: Song, members: Member[]): LineDistri
     totalUniqueSeconds,
     totalMemberSeconds,
     lineCount: sortedLines.length,
-    adlibCount: sortedLines.filter((line) => line.kind === 'adlib').length,
+    kindCounts,
   };
 }
 

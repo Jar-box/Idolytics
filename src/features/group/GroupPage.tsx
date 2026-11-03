@@ -192,6 +192,98 @@ export function GroupPage({ groupId }: GroupPageProps) {
         ]}
       />
 
+      <section className="panel songs-panel">
+        <header className="panel-header">
+          <div>
+            <p className="eyebrow">Discography log</p>
+            <h2>Songs</h2>
+          </div>
+          <button type="button" className="btn btn-ghost btn-small" onClick={openAddSong}>
+            <Plus size={15} />
+            Add song
+          </button>
+        </header>
+
+        {group.songs.length === 0 ? (
+          <EmptyState
+            compact
+            icon={<Music2 size={24} />}
+            title="No songs logged"
+            message="Add a track, split it into sections, and start plotting."
+            action={
+              <button type="button" className="btn btn-primary btn-small" onClick={openAddSong}>
+                Add song
+              </button>
+            }
+          />
+        ) : (
+          <div className="song-list">
+            {songSummaries.map(({ song, counts, topRow, topMember }, index) => (
+              <div key={song.id} className="song-row">
+                <button
+                  type="button"
+                  className="song-row-main"
+                  onClick={() => goSong(group.id, song.id)}
+                >
+                  <span className="song-index mono">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="song-copy">
+                    <h3>{song.title.trim() || 'Untitled song'}</h3>
+                    <span className="song-meta">
+                      {formatClock(song.durationSec)} · {counts.sections}{' '}
+                      {counts.sections === 1 ? 'section' : 'sections'} · {counts.formations}{' '}
+                      {counts.formations === 1 ? 'formation' : 'formations'}
+                    </span>
+                  </span>
+                  <span className="song-choreo mono">
+                    {formatClock(counts.seconds)}
+                    <small>choreo</small>
+                  </span>
+                  <span className="song-leader">
+                    {topMember && topRow ? (
+                      <>
+                        <Avatar
+                          name={topMember.name}
+                          face={topMember.face}
+                          color={topMember.color}
+                          size={28}
+                        />
+                        <span>
+                          {topMember.name}
+                          <small>{roundTo(topRow.percentage, 1).toFixed(1)}%</small>
+                        </span>
+                      </>
+                    ) : (
+                      <span className="is-muted">No scores</span>
+                    )}
+                  </span>
+                  <ChevronRight size={17} className="song-row-arrow" />
+                </button>
+                <div className="song-row-actions">
+                  <button
+                    type="button"
+                    className="icon-button icon-button-small"
+                    onClick={() => openEditSong(song)}
+                    aria-label={`Edit ${song.title || 'song'}`}
+                    title="Edit song"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button icon-button-small"
+                    onClick={() => setSongToDelete(song)}
+                    aria-label={`Delete ${song.title || 'song'}`}
+                    title="Delete song"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <div className="group-layout">
         <section className="panel members-panel">
           <header className="panel-header">
@@ -286,99 +378,6 @@ export function GroupPage({ groupId }: GroupPageProps) {
           compact
         />
       </div>
-
-      <section className="panel songs-panel">
-        <header className="panel-header">
-          <div>
-            <p className="eyebrow">Discography log</p>
-            <h2>Songs</h2>
-          </div>
-          <button type="button" className="btn btn-ghost btn-small" onClick={openAddSong}>
-            <Plus size={15} />
-            Add song
-          </button>
-        </header>
-
-        {group.songs.length === 0 ? (
-          <EmptyState
-            compact
-            icon={<Music2 size={24} />}
-            title="No songs logged"
-            message="Add a track, split it into sections, and start plotting."
-            action={
-              <button type="button" className="btn btn-primary btn-small" onClick={openAddSong}>
-                Add song
-              </button>
-            }
-          />
-        ) : (
-          <div className="song-list">
-            {songSummaries.map(({ song, counts, topRow, topMember }, index) => (
-              <div key={song.id} className="song-row">
-                <button
-                  type="button"
-                  className="song-row-main"
-                  onClick={() => goSong(group.id, song.id)}
-                >
-                  <span className="song-index mono">{String(index + 1).padStart(2, '0')}</span>
-                  <span className="song-copy">
-                    <h3>{song.title.trim() || 'Untitled song'}</h3>
-                    <span className="song-meta">
-                      {formatClock(song.durationSec)} · {counts.sections}{' '}
-                      {counts.sections === 1 ? 'section' : 'sections'} · {counts.formations}{' '}
-                      {counts.formations === 1 ? 'formation' : 'formations'}
-                    </span>
-                  </span>
-                  <span className="song-choreo mono">
-                    {formatClock(counts.seconds)}
-                    <small>choreo</small>
-                  </span>
-                  <span className="song-leader">
-                    {topMember && topRow ? (
-                      <>
-                        <Avatar
-                          name={topMember.name}
-                          face={topMember.face}
-                          color={topMember.color}
-                          size={28}
-                        />
-                        <span>
-                          {topMember.name}
-                          <small>{roundTo(topRow.percentage, 1).toFixed(1)}%</small>
-                        </span>
-                      </>
-                    ) : (
-                      <span className="is-muted">No scores</span>
-                    )}
-                  </span>
-                  <ChevronRight size={17} className="song-row-arrow" />
-                </button>
-                <div className="song-row-actions">
-                  <button
-                    type="button"
-                    className="icon-button icon-button-small"
-                    onClick={() => openEditSong(song)}
-                    aria-label={`Edit ${song.title || 'song'}`}
-                    title="Edit song"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button icon-button-small"
-                    onClick={() => setSongToDelete(song)}
-                    aria-label={`Delete ${song.title || 'song'}`}
-                    title="Delete song"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
       <MemberModal
         open={memberModalOpen}
         groupId={group.id}
@@ -398,7 +397,7 @@ export function GroupPage({ groupId }: GroupPageProps) {
         title="Delete this member?"
         message={
           memberToDelete
-            ? `${memberToDelete.name || 'This member'} will be removed from the roster, every formation, and every logged line in this group. This cannot be undone except with Undo.`
+            ? `${memberToDelete.name || 'This member'} will be removed from the roster, every formation, and every logged part in this group. This cannot be undone except with Undo.`
             : ''
         }
         confirmLabel="Delete member"
@@ -417,7 +416,7 @@ export function GroupPage({ groupId }: GroupPageProps) {
         title="Delete this song?"
         message={
           songToDelete
-            ? `${songToDelete.title || 'This song'} and all of its sections, formations, logged lines, and scores will be removed.`
+            ? `${songToDelete.title || 'This song'} and all of its sections, formations, logged parts, and scores will be removed.`
             : ''
         }
         confirmLabel="Delete song"

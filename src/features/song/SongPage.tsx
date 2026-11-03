@@ -562,7 +562,7 @@ export function SongPage({ groupId, songId }: SongPageProps) {
       <ConfirmDialog
         open={deleteOpen}
         title="Delete this song?"
-        message={`${song.title || 'This song'} and all of its sections, formations, logged lines, and scores will be removed.`}
+        message={`${song.title || 'This song'} and all of its sections, formations, logged parts, and scores will be removed.`}
         confirmLabel="Delete song"
         tone="danger"
         onCancel={() => setDeleteOpen(false)}

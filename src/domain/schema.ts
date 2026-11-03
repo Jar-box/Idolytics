@@ -55,7 +55,8 @@ export const sectionSchema = z.object({
   formations: z.array(formationSchema).max(200),
 });
 
-export const lineKindSchema = z.enum(['sung', 'adlib']);
+export const LINE_KINDS = ['sung', 'adlib', 'rap', 'highnote'] as const;
+export const lineKindSchema = z.enum(LINE_KINDS);
 
 export const vocalLineSchema = z.object({
   id: idSchema,

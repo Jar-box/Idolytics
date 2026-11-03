@@ -3,8 +3,10 @@ import { get, set } from 'idb-keyval';
 import {
   workspaceSchema,
   createEmptyWorkspace,
+  lineKindSchema,
   type Group,
   type LineKind,
+  type VocalLine,
   type Workspace,
 } from '../domain/schema';
 import { validateWorkspaceIntegrity } from '../domain/integrity';
@@ -45,7 +47,7 @@ function cleanLineInput(group: Group, input: LineInput): LineInput | null {
   const { startSec, endSec } = input;
   if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return null;
   if (startSec < 0 || endSec > MAX_TIME || endSec <= startSec) return null;
-  if (input.kind !== 'sung' && input.kind !== 'adlib') return null;
+  if (!lineKindSchema.safeParse(input.kind).success) return null;
 
   const memberIds = [...new Set(input.memberIds)];
   if (memberIds.length === 0) return null;
@@ -124,6 +126,13 @@ interface WorkspaceState {
     songId: string,
     lineId: string,
     patch: Partial<LineInput>,
+  ) => boolean;
+  mergeLineIntoExisting: (
+    groupId: string,
+    songId: string,
+    targetLineId: string | null,
+    targetInput: LineInput,
+    conflictMemberId: string,
   ) => boolean;
   deleteLine: (groupId: string, songId: string, lineId: string) => void;
   setGrid: (groupId: string, songId: string, cols: number, rows: number) => number;
@@ -502,6 +511,77 @@ export const useWorkspaceStore = create<WorkspaceState>((setState, getState) => 
         else delete target.lyric;
         if (cleaned.note) target.note = cleaned.note;
         else delete target.note;
+      });
+      return true;
+    },
+
+    mergeLineIntoExisting: (groupId, songId, targetLineId, targetInput, conflictMemberId) => {
+      const group = getGroup(getState().workspace, groupId);
+      const song = group?.songs.find((entry) => entry.id === songId);
+      if (!group || !song) return false;
+      const cleaned = cleanLineInput(group, targetInput);
+      if (!cleaned) return false;
+      const existing = song.lines.find(
+        (l) => l.id !== targetLineId && l.memberIds.includes(conflictMemberId) &&
+          l.startSec < cleaned.endSec - EPSILON && cleaned.startSec < l.endSec + EPSILON,
+      );
+      if (!existing) return false;
+      commit(`merge-line:${groupId}:${songId}`, (draft) => {
+        const dSong = getGroup(draft, groupId)?.songs.find((entry) => entry.id === songId);
+        if (!dSong) return;
+        const dExisting = dSong.lines.find((l) => l.id === existing.id);
+        if (!dExisting) return;
+        // The edited line becomes the shared part, keeping its own id and times.
+        let dTarget: VocalLine | null = null;
+        if (targetLineId) {
+          dTarget = dSong.lines.find((l) => l.id === targetLineId) ?? null;
+          if (!dTarget) return;
+          dTarget.startSec = cleaned.startSec;
+          dTarget.endSec = cleaned.endSec;
+          dTarget.memberIds = Array.from(new Set([...dTarget.memberIds, ...cleaned.memberIds]));
+          dTarget.kind = cleaned.kind;
+          if (cleaned.lyric) dTarget.lyric = cleaned.lyric;
+          else delete dTarget.lyric;
+          if (cleaned.note) dTarget.note = cleaned.note;
+          else delete dTarget.note;
+        } else {
+          dTarget = {
+            id: newId('ln'),
+            startSec: cleaned.startSec,
+            endSec: cleaned.endSec,
+            memberIds: cleaned.memberIds,
+            kind: cleaned.kind,
+            ...(cleaned.lyric ? { lyric: cleaned.lyric } : {}),
+            ...(cleaned.note ? { note: cleaned.note } : {}),
+          };
+          dSong.lines.push(dTarget);
+        }
+        // Cut the conflicting line into non-overlapping pieces around the shared part.
+        const pieces: VocalLine[] = [];
+        if (dExisting.startSec < dTarget.startSec - EPSILON) {
+          pieces.push({
+            id: newId('ln'),
+            startSec: dExisting.startSec,
+            endSec: dTarget.startSec,
+            memberIds: [...dExisting.memberIds],
+            kind: dExisting.kind,
+            ...(dExisting.lyric ? { lyric: dExisting.lyric } : {}),
+            ...(dExisting.note ? { note: dExisting.note } : {}),
+          });
+        }
+        if (dExisting.endSec > dTarget.endSec + EPSILON) {
+          pieces.push({
+            id: newId('ln'),
+            startSec: dTarget.endSec,
+            endSec: dExisting.endSec,
+            memberIds: [...dExisting.memberIds],
+            kind: dExisting.kind,
+            ...(dExisting.lyric ? { lyric: dExisting.lyric } : {}),
+            ...(dExisting.note ? { note: dExisting.note } : {}),
+          });
+        }
+        dSong.lines = dSong.lines.filter((l) => l.id !== existing.id);
+        dSong.lines.push(...pieces);
       });
       return true;
     },

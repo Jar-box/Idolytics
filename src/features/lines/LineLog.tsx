@@ -2,6 +2,7 @@ import { ListMusic, Pencil, Play, Trash2 } from 'lucide-react';
 import type { Group, VocalLine } from '../../domain/schema';
 import { lineDuration } from '../../domain/lineDistribution';
 import { formatClock } from '../../lib/time';
+import { lineKindMeta } from './lineKindMeta';
 
 interface LineLogProps {
   group: Group;
@@ -34,7 +35,7 @@ export function LineLog({
       <header className="panel-header">
         <div>
           <p className="eyebrow">Chronological audit trail</p>
-          <h2>Logged lines</h2>
+          <h2>Logged parts</h2>
         </div>
         <span className="panel-meta mono">
           {lines.length} {lines.length === 1 ? 'PART' : 'PARTS'}
@@ -44,7 +45,7 @@ export function LineLog({
       {lines.length === 0 ? (
         <div className="line-log-empty">
           <ListMusic size={22} />
-          <p>No lines logged yet. Capture the first part in the panel on the right.</p>
+          <p>No parts logged yet. Capture the first part in the panel on the right.</p>
         </div>
       ) : (
         <div className="line-log-list">
@@ -52,6 +53,7 @@ export function LineLog({
             const selected = line.id === selectedLineId;
             const editing = line.id === editingLineId;
             const playing = activeLineIds.has(line.id);
+            const kindMeta = lineKindMeta[line.kind];
             return (
               <article
                 key={line.id}
@@ -85,12 +87,8 @@ export function LineLog({
                     <span>{formatClock(line.endSec, true)}</span>
                   </span>
 
-                  <span
-                    className={`line-kind-badge ${
-                      line.kind === 'adlib' ? 'is-adlib' : 'is-sung'
-                    }`}
-                  >
-                    {line.kind === 'adlib' ? 'Ad-lib' : 'Line'}
+                  <span className={`line-kind-badge ${kindMeta.className}`}>
+                    {kindMeta.label}
                   </span>
 
                   <span className="line-log-copy">
@@ -125,7 +123,7 @@ export function LineLog({
                     type="button"
                     className="icon-button icon-button-small"
                     onClick={() => onSeek(line.startSec)}
-                    title="Seek to this line"
+                    title="Seek to this part"
                     aria-label={`Seek to ${formatClock(line.startSec, true)}`}
                   >
                     <Play size={13} />
@@ -134,8 +132,8 @@ export function LineLog({
                     type="button"
                     className="icon-button icon-button-small"
                     onClick={() => onEdit(line)}
-                    title="Edit line"
-                    aria-label={`Edit line at ${formatClock(line.startSec, true)}`}
+                    title="Edit part"
+                    aria-label={`Edit part at ${formatClock(line.startSec, true)}`}
                   >
                     <Pencil size={13} />
                   </button>
@@ -143,8 +141,8 @@ export function LineLog({
                     type="button"
                     className="icon-button icon-button-small line-log-delete"
                     onClick={() => onDelete(line.id)}
-                    title="Delete line"
-                    aria-label={`Delete line at ${formatClock(line.startSec, true)}`}
+                    title="Delete part"
+                    aria-label={`Delete part at ${formatClock(line.startSec, true)}`}
                   >
                     <Trash2 size={13} />
                   </button>

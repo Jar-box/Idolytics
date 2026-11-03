@@ -62,6 +62,18 @@ export function AudioPanel({
     setAudioError(false);
   }, [audioUrl]);
 
+  useEffect(() => {
+    if (!playing || !audioUrl) return;
+    let rafId = 0;
+    const tick = () => {
+      const el = audioRef.current;
+      if (el) onTimeUpdate(el.currentTime);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [playing, audioUrl, audioRef, onTimeUpdate]);
+
   const safeCurrent = duration > 0 ? clamp(currentTime, 0, duration) : 0;
   const progress = duration > 0 ? (safeCurrent / duration) * 100 : 0;
   const scrubStyle = { '--audio-progress': `${progress}%` } as CSSProperties;

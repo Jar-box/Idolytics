@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { songSchema } from './schema';
+import { vocalLineSchema, songSchema } from './schema';
 
 const legacySong = {
   id: 'sng_legacy',
@@ -10,6 +10,25 @@ const legacySong = {
   sections: [],
   lines: [],
 };
+
+describe('vocal line kinds', () => {
+  const baseLine = {
+    id: 'lin_1',
+    startSec: 10,
+    endSec: 20,
+    memberIds: ['mem_1'],
+  };
+
+  it.each(['sung', 'adlib', 'rap', 'highnote'] as const)('accepts %s parts', (kind) => {
+    const parsed = vocalLineSchema.parse({ ...baseLine, kind });
+    expect(parsed.kind).toBe(kind);
+  });
+
+  it('rejects an unknown part kind', () => {
+    const result = vocalLineSchema.safeParse({ ...baseLine, kind: 'whistle' });
+    expect(result.success).toBe(false);
+  });
+});
 
 describe('songSchema audio references', () => {
   it('defaults audioFileName to null for songs saved before audio support', () => {
