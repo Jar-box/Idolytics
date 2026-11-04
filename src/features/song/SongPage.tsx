@@ -44,7 +44,6 @@ export function SongPage({ groupId, songId }: SongPageProps) {
   const mediaSyncing = useMediaStore((state) => state.syncing);
   const mediaManifest = useMediaStore((state) => state.manifest);
   const mediaLibraryPath = useMediaStore((state) => state.libraryPath);
-  const mediaCopyEnabled = useMediaStore((state) => state.copyEnabled);
   const registerMediaCopy = useMediaStore((state) => state.registerCopy);
   const goGroup = useNavStore((state) => state.goGroup);
   const goWorkspace = useNavStore((state) => state.goWorkspace);
@@ -188,7 +187,8 @@ export function SongPage({ groupId, songId }: SongPageProps) {
 
   const runMediaCopy = (kind: 'audio' | 'video', file: File) => {
     const setCopyState = kind === 'audio' ? setAudioCopyState : setVideoCopyState;
-    if (!mediaCopyEnabled) {
+    const store = useMediaStore.getState();
+    if (!store.copyEnabled) {
       setCopyState({
         status: 'off',
         progress: 0,
@@ -198,7 +198,7 @@ export function SongPage({ groupId, songId }: SongPageProps) {
       });
       return;
     }
-    if (mediaStatus === 'unavailable') {
+    if (store.status === 'unavailable') {
       setCopyState({
         status: 'unavailable',
         progress: 0,
@@ -273,9 +273,18 @@ export function SongPage({ groupId, songId }: SongPageProps) {
       });
   };
 
-  const retryMediaCopy = (kind: 'audio' | 'video') => {
+  const retryMediaCopy = async (kind: 'audio' | 'video') => {
     const file = pendingMediaFilesRef.current[kind];
-    if (file) runMediaCopy(kind, file);
+    if (!file) {
+      pushToast('No pending file to retry.', 'info');
+      return;
+    }
+    await useMediaStore.getState().refresh();
+    const status = useMediaStore.getState().status;
+    if (status !== 'ready') {
+      pushToast('Media library is still unavailable.', 'error');
+    }
+    runMediaCopy(kind, file);
   };
 
   const handleImported = (
@@ -493,7 +502,7 @@ export function SongPage({ groupId, songId }: SongPageProps) {
             onVideoFile={handleVideoFile}
             onTimeUpdate={setCurrentTime}
             onLoadedMetadata={setVideoDuration}
-            onRetryVideoCopy={() => retryMediaCopy('video')}
+            onRetryVideoCopy={mediaLibrarySupported() ? () => void retryMediaCopy('video') : undefined}
             onImportVideoUrl={
               mediaLibrarySupported() ? () => setImportKind('video') : undefined
             }
@@ -530,7 +539,7 @@ export function SongPage({ groupId, songId }: SongPageProps) {
             onAudioFile={handleAudioFile}
             onTimeUpdate={setCurrentTime}
             onUseTrackDuration={handleUseTrackDuration}
-            onRetryAudioCopy={() => retryMediaCopy('audio')}
+            onRetryAudioCopy={mediaLibrarySupported() ? () => void retryMediaCopy('audio') : undefined}
             onImportAudioUrl={
               mediaLibrarySupported() ? () => setImportKind('audio') : undefined
             }
@@ -571,3 +580,6 @@ export function SongPage({ groupId, songId }: SongPageProps) {
     </div>
   );
 }
+
+
+

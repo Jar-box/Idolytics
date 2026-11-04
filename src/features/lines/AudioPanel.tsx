@@ -9,7 +9,7 @@ import {
 import { Download, HardDrive, Link2, LoaderCircle, Music2, Pause, Play } from 'lucide-react';
 import { MediaCopyNote } from '../../components/MediaCopyNote';
 import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
-import { clamp, formatClock } from '../../lib/time';
+import { clamp, formatClock, roundTime } from '../../lib/time';
 
 interface AudioPanelProps {
   fileName: string | null;
@@ -94,22 +94,22 @@ export function AudioPanel({
     }
   }, [audioRef]);
 
+  const nudge = useCallback(
+    (delta: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const max = Number.isFinite(audio.duration) ? audio.duration : duration;
+      const next = roundTime(clamp(audio.currentTime + delta, 0, max || 0));
+      audio.currentTime = next;
+      onTimeUpdate(next);
+    },
+    [audioRef, duration, onTimeUpdate],
+  );
+
   useEffect(() => {
     if (!audioUrl) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      const isSpace = event.code === 'Space' || event.key === ' ';
-      if (
-        !isSpace ||
-        event.repeat ||
-        event.isComposing ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.altKey ||
-        event.shiftKey ||
-        event.defaultPrevented
-      ) {
-        return;
-      }
+      if (event.repeat || event.isComposing || event.defaultPrevented) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -121,27 +121,33 @@ export function AudioPanel({
         return;
       }
       if (document.querySelector('[role="dialog"]')) return;
-      event.preventDefault();
-      void togglePlayback();
+
+      const isSpace = event.code === 'Space' || event.key === ' ';
+      if (isSpace) {
+        if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+        event.preventDefault();
+        void togglePlayback();
+        return;
+      }
+
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        // Alt+Arrow is browser history navigation, so leave that combo alone.
+        if (event.altKey) return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowRight' ? 1 : -1;
+        const step = event.ctrlKey || event.metaKey ? 0.01 : event.shiftKey ? 1 : 0.1;
+        nudge(direction * step);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [audioUrl, togglePlayback]);
-
-  const nudge = (delta: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const max = Number.isFinite(audio.duration) ? audio.duration : duration;
-    const next = clamp(audio.currentTime + delta, 0, max || 0);
-    audio.currentTime = next;
-    onTimeUpdate(next);
-  };
+  }, [audioUrl, togglePlayback, nudge]);
 
   const handleScrub = (value: number) => {
     const audio = audioRef.current;
     if (!audio) return;
     const max = Number.isFinite(audio.duration) ? audio.duration : duration;
-    const next = clamp(value, 0, max || 0);
+    const next = roundTime(clamp(value, 0, max || 0));
     audio.currentTime = next;
     onTimeUpdate(next);
   };
@@ -213,7 +219,7 @@ export function AudioPanel({
               type="range"
               min={0}
               max={duration || 0}
-              step={0.01}
+              step={0.001}
               value={safeCurrent}
               onChange={(event) => handleScrub(Number(event.target.value))}
               style={scrubStyle}
@@ -334,8 +340,9 @@ export function AudioPanel({
       )}
 
       <p className="audio-note">
-        Press Space to play or pause. Audio stays on your device and is never embedded in the
-        workspace. Timestamps are saved.
+        Press Space to play or pause · ← / → nudge 0.1s (Shift 1s, Ctrl/Cmd 0.01s). Audio stays
+        on your device and is never embedded in the workspace. Timestamps are saved to the
+        millisecond.
       </p>
 
       <audio
@@ -344,8 +351,15 @@ export function AudioPanel({
         preload="metadata"
         onTimeUpdate={(event) => onTimeUpdate(event.currentTarget.currentTime)}
         onSeeked={(event) => onTimeUpdate(event.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
+        onPlay={(event) => {
+          setPlaying(true);
+          onTimeUpdate(event.currentTarget.currentTime);
+        }}
+        onPause={(event) => {
+          setPlaying(false);
+          // Capture the exact pause position instead of the last animation frame.
+          onTimeUpdate(roundTime(event.currentTarget.currentTime));
+        }}
         onEnded={(event) => {
           setPlaying(false);
           if (Number.isFinite(event.currentTarget.duration)) {

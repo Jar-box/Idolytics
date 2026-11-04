@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useState, useCallback, type RefObject } from 'react';
 import { MicVocal, UserPlus } from 'lucide-react';
-import type { Group, Song } from '../../domain/schema';
+import type { Group, Song, VocalLine } from '../../domain/schema';
 import { buildLineDistribution, linesAtTime } from '../../domain/lineDistribution';
 import { EmptyState } from '../../components/EmptyState';
 import { StatsRow } from '../../components/StatsRow';
 import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
-import { formatClock, formatPercent } from '../../lib/time';
+import { formatClock, formatPercent, roundTime } from '../../lib/time';
 import { useNavStore } from '../../store/navStore';
 import { useToastStore } from '../../store/toastStore';
 import { useWorkspaceStore } from '../../store/workspaceStore';
@@ -56,6 +56,7 @@ export function LineDistributionPanel({
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<DistributionSortMode>('time');
+  const [soloMemberId, setSoloMemberId] = useState<string | null>(null);
 
   const distribution = useMemo(
     () => buildLineDistribution(song, group.members),
@@ -69,6 +70,15 @@ export function LineDistributionPanel({
     () => new Map(group.members.map((member) => [member.id, member])),
     [group.members],
   );
+  const soloMember = soloMemberId
+    ? group.members.find((member) => member.id === soloMemberId) ?? null
+    : null;
+  const soloParts = useMemo(() => {
+    if (!soloMemberId) return [];
+    return song.lines
+      .filter((line) => line.memberIds.includes(soloMemberId))
+      .sort((a, b) => a.startSec - b.startSec);
+  }, [soloMemberId, song.lines]);
   const editingLine = editingLineId
     ? song.lines.find((line) => line.id === editingLineId) ?? null
     : null;
@@ -80,7 +90,10 @@ export function LineDistributionPanel({
     if (editingLineId && !song.lines.some((line) => line.id === editingLineId)) {
       setEditingLineId(null);
     }
-  }, [song.lines, selectedLineId, editingLineId]);
+    if (soloMemberId && !group.members.some((member) => member.id === soloMemberId)) {
+      setSoloMemberId(null);
+    }
+  }, [song.lines, group.members, selectedLineId, editingLineId, soloMemberId]);
 
   const leader = useMemo(
     () =>
@@ -120,9 +133,107 @@ export function LineDistributionPanel({
   };
 
   const handleMoveLine = (lineId: string, startSec: number, endSec: number) => {
-    const ok = updateLine(group.id, song.id, lineId, { startSec, endSec });
+    const ok = updateLine(group.id, song.id, lineId, {
+      startSec: roundTime(startSec),
+      endSec: roundTime(endSec),
+    });
     if (ok) pushToast('Part moved.', 'success');
   };
+
+  const handleToggleSolo = (memberId: string) => {
+    if (soloMemberId === memberId) {
+      setSoloMemberId(null);
+      return;
+    }
+    const parts = song.lines
+      .filter((line) => line.memberIds.includes(memberId))
+      .sort((a, b) => a.startSec - b.startSec);
+    if (parts.length === 0) {
+      pushToast('No parts logged for this member.', 'info');
+      return;
+    }
+    setSoloMemberId(memberId);
+    const audio = audioRef.current;
+    if (audio && audioUrl) {
+      const now = audio.currentTime;
+      const next =
+        parts.find((part) => part.endSec > now + 0.05) ?? parts[0];
+      try {
+        audio.currentTime = next.startSec;
+      } catch {
+        // ignore
+      }
+      onTimeUpdate(next.startSec);
+      void audio.play().catch(() => {});
+    } else if (!audioUrl) {
+      pushToast('Link audio to listen to parts.', 'info');
+    }
+  };
+
+  const handleTimeUpdate = useCallback(
+    (time: number) => {
+      if (soloMemberId && audioRef.current && !audioRef.current.paused) {
+        const parts = soloParts;
+        const eps = 0.05;
+        let current: VocalLine | null = null;
+        for (const part of parts) {
+          if (time >= part.startSec - eps && time <= part.endSec + eps) {
+            current = part;
+            break;
+          }
+        }
+        if (current) {
+          if (time < current.endSec - eps) {
+            onTimeUpdate(time);
+            return;
+          }
+          // If the next part is adjacent/overlapping, let playback flow
+          // naturally into it instead of skipping or pausing.
+          const adjacent = parts.find(
+            (part) => part !== current && part.startSec <= current.endSec + eps,
+          );
+          if (adjacent) {
+            onTimeUpdate(time);
+            return;
+          }
+          const next = parts.find((part) => part.startSec > current.endSec + eps);
+          if (next) {
+            audioRef.current.currentTime = next.startSec;
+            onTimeUpdate(next.startSec);
+            return;
+          }
+          audioRef.current.pause();
+          audioRef.current.currentTime = current.endSec;
+          onTimeUpdate(current.endSec);
+          return;
+        }
+        const next = parts.find((part) => part.startSec > time + eps);
+        if (next) {
+          audioRef.current.currentTime = next.startSec;
+          onTimeUpdate(next.startSec);
+          return;
+        }
+        if (parts.length && time < parts[0].startSec - eps) {
+          audioRef.current.currentTime = parts[0].startSec;
+          onTimeUpdate(parts[0].startSec);
+          return;
+        }
+        const last = parts[parts.length - 1];
+        if (last && time > last.endSec + eps) {
+          audioRef.current.pause();
+          audioRef.current.currentTime = last.endSec;
+          onTimeUpdate(last.endSec);
+          return;
+        }
+      }
+      onTimeUpdate(time);
+    },
+    [soloMemberId, soloParts, audioRef, onTimeUpdate],
+  );
+
+  useEffect(() => {
+    setSoloMemberId(null);
+  }, [song.id]);
 
   useEffect(() => {
     if (!editingLineId) return;
@@ -132,15 +243,17 @@ export function LineDistributionPanel({
         return;
       }
       const target = event.target as Element | null;
-      if (target?.closest('.dist-segment, .line-log-row, .line-capture-panel, .audio-panel')) {
+      if (target?.closest('.dist-segment, .line-log-row, .line-capture-panel, .audio-panel, .modal-backdrop, .modal-panel')) {
         return;
       }
       setEditingLineId(null);
+      setSelectedLineId(null);
     };
 
     const handleKeydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setEditingLineId(null);
+        setSelectedLineId(null);
       }
     };
 
@@ -151,6 +264,31 @@ export function LineDistributionPanel({
       document.removeEventListener('keydown', handleKeydown);
     };
   }, [editingLineId, pushToast]);
+
+  // Keep DOM focus from lingering on a dist-segment after clicking elsewhere:
+  // clicking a non-focusable element does not move focus, so the segment
+  // button would otherwise keep its focus ring (and handles) indefinitely.
+  useEffect(() => {
+    const handleBlurFocus = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest('.dist-segment')) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active.closest && active.closest('.dist-segment')) {
+        active.blur();
+      }
+      // Clear the selected (focused) segment when clicking anywhere that is
+      // not a dist-segment / log row / exempt panel.
+      if (
+        !target?.closest(
+          '.dist-segment, .line-log-row, .line-capture-panel, .audio-panel, .modal-backdrop, .modal-panel',
+        )
+      ) {
+        setSelectedLineId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleBlurFocus);
+    return () => document.removeEventListener('mousedown', handleBlurFocus);
+  }, []);
 
   if (group.members.length === 0) {
     return (
@@ -234,6 +372,8 @@ export function LineDistributionPanel({
             onSelectLine={handleSelectLine}
             onSeek={seek}
             onMoveLine={handleMoveLine}
+            soloMemberId={soloMemberId}
+            onToggleSolo={handleToggleSolo}
           />
 
           <LineLog
@@ -269,6 +409,21 @@ export function LineDistributionPanel({
         </aside>
       </div>
 
+      {soloMember ? (
+        <div className="solo-banner">
+          <span>
+            Playing only {soloMember.name || 'this member'}'s parts
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => setSoloMemberId(null)}
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
+
       <section className="audio-player-bottom">
         <AudioPanel
           fileName={song.audioFileName}
@@ -280,7 +435,7 @@ export function LineDistributionPanel({
           mediaResolving={audioResolving}
           mediaSource={audioSource}
           copyState={audioCopyState}
-          onTimeUpdate={onTimeUpdate}
+          onTimeUpdate={handleTimeUpdate}
           onFile={onAudioFile}
           onUseTrackDuration={onUseTrackDuration}
           onRetryCopy={onRetryAudioCopy}

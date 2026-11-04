@@ -7,6 +7,10 @@ import {
 } from './schema';
 
 const EPSILON = 1e-6;
+// Media time updates land a fraction of a millisecond away from a saved
+// boundary, so a part should light up as soon as the playhead is within half
+// a millisecond of its start instead of waiting for the next sample.
+const START_EPSILON = 0.0005;
 
 export type LineKindCounts = Record<LineKind, number>;
 
@@ -56,7 +60,7 @@ export function lineDuration(line: VocalLine): number {
 export function linesAtTime(lines: VocalLine[], timeSec: number): VocalLine[] {
   return lines.filter(
     (line) =>
-      timeSec >= line.startSec - EPSILON && timeSec < line.endSec - EPSILON,
+      timeSec >= line.startSec - START_EPSILON && timeSec < line.endSec - EPSILON,
   );
 }
 

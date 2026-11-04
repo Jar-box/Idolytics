@@ -1,11 +1,13 @@
 import {
+  Fragment,
   useCallback,
+  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type MouseEvent,
-  type WheelEvent,
 } from 'react';
 import type { Group, Song, VocalLine } from '../../domain/schema';
 import {
@@ -15,7 +17,7 @@ import {
   type MemberDistribution,
 } from '../../domain/lineDistribution';
 import { Avatar } from '../../components/Avatar';
-import { clamp, formatClock, formatPercent } from '../../lib/time';
+import { clamp, formatClock, formatPercent, roundTo } from '../../lib/time';
 import { formatKindCount, lineKindMeta, lineKindOptions } from './lineKindMeta';
 
 const LANE_HEIGHT = 15;
@@ -25,7 +27,7 @@ const DRAG_THRESHOLD_PX = 2;
 const SNAP_PX = 12;
 
 const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 4;
+const ZOOM_MAX = 8;
 const ZOOM_STEP = 0.1;
 
 export type DistributionSortMode = 'time' | 'roster' | 'average';
@@ -44,6 +46,8 @@ interface DistributionChartProps {
   onSelectLine: (lineId: string) => void;
   onSeek: (time: number) => void;
   onMoveLine?: (lineId: string, startSec: number, endSec: number) => void;
+  soloMemberId?: string | null;
+  onToggleSolo?: (memberId: string) => void;
 }
 
 function tickStep(spanSec: number): number {
@@ -80,8 +84,22 @@ export function DistributionChart({
   onSelectLine,
   onSeek,
   onMoveLine,
+  soloMemberId = null,
+  onToggleSolo,
 }: DistributionChartProps) {
   const [hoveredLineId, setHoveredLineId] = useState<string | null>(null);
+
+  // Clear hover (and thus handles) when clicking outside any dist-segment,
+  // since clicking non-focusable elements does not blur/focus or mouseleave.
+  useEffect(() => {
+    const handle = (event: Event) => {
+      const target = (event as unknown as MouseEvent).target as Element | null;
+      if (target?.closest('.dist-segment')) return;
+      setHoveredLineId(null);
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, []);
   const [dragging, setDragging] = useState<{
     lineId: string;
     memberId: string;
@@ -102,6 +120,37 @@ export function DistributionChart({
   const dragCurrent = useRef<{ startSec: number; endSec: number } | null>(null);
   const didDragRef = useRef(false);
   const [zoom, setZoom] = useState(1);
+  const [offScreenTop, setOffScreenTop] = useState<string[]>([]);
+  const [offScreenBottom, setOffScreenBottom] = useState<string[]>([]);
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const topIndicatorsRef = useRef<HTMLDivElement | null>(null);
+  const bottomIndicatorsRef = useRef<HTMLDivElement | null>(null);
+  const visibleRef = useRef<Set<string>>(new Set());
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const zoomRef = useRef(zoom);
+  const pendingZoomAnchor = useRef<{ clientX: number; ratio: number } | null>(null);
+  const currentTimeRef = useRef(currentTime);
+  const spanSecRef = useRef(spanSec);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    spanSecRef.current = spanSec;
+  }, [spanSec]);
+
+  useEffect(() => {
+    zoomRef.current = 1;
+    pendingZoomAnchor.current = null;
+    setZoom(1);
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  }, [song.id]);
 
   const memberById = useMemo(
     () => new Map(group.members.map((member) => [member.id, member])),
@@ -132,6 +181,62 @@ export function DistributionChart({
     [rows, group.members, sortMode],
   );
   const ticks = useMemo(() => buildTicks(spanSec), [spanSec]);
+
+  const recomputeOffScreen = useCallback(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const rootRect = root.getBoundingClientRect();
+    const nextTop: string[] = [];
+    const nextBottom: string[] = [];
+    for (const memberId of activeMemberIds) {
+      if (visibleRef.current.has(memberId)) continue;
+      const el = rowRefs.current.get(memberId);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom <= rootRect.top + 2) nextTop.push(memberId);
+      else if (rect.top >= rootRect.bottom - 2) nextBottom.push(memberId);
+      else if (rect.top < rootRect.top) nextTop.push(memberId);
+      else nextBottom.push(memberId);
+    }
+    setOffScreenTop((prev) =>
+      prev.length === nextTop.length && prev.every((id, i) => id === nextTop[i]) ? prev : nextTop,
+    );
+    setOffScreenBottom((prev) =>
+      prev.length === nextBottom.length && prev.every((id, i) => id === nextBottom[i]) ? prev : nextBottom,
+    );
+    const topEl = topIndicatorsRef.current;
+    const bottomEl = bottomIndicatorsRef.current;
+    if (topEl) topEl.style.top = ${root.scrollTop + 8}px;
+    if (bottomEl) bottomEl.style.top = ${root.scrollTop + root.clientHeight - 32}px;
+  }, [activeMemberIds]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const id = entry.target.getAttribute('data-member-id');
+          if (!id) continue;
+          if (entry.isIntersecting) visibleRef.current.add(id);
+          else visibleRef.current.delete(id);
+        }
+        recomputeOffScreen();
+      },
+      { root, threshold: 0 },
+    );
+    rowRefs.current.forEach((el) => observer.observe(el));
+    const onScroll = () => recomputeOffScreen();
+    root.addEventListener('scroll', onScroll, { passive: true });
+    const onResize = () => recomputeOffScreen();
+    window.addEventListener('resize', onResize);
+    recomputeOffScreen();
+    return () => {
+      observer.disconnect();
+      root.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [sortedRows, recomputeOffScreen]);
 
   const segmentBoundaries = useCallback(
     (excludeLineId: string): number[] =>
@@ -260,34 +365,92 @@ export function DistributionChart({
     onSeek(ratio * spanSec);
   };
 
-  const handleWheel = useCallback(
-    (event: WheelEvent<HTMLDivElement>) => {
-      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+  const applyZoom = useCallback((nextZoom: number, anchorClientX?: number) => {
+    const next = roundTo(clamp(nextZoom, ZOOM_MIN, ZOOM_MAX), 2);
+    const current = zoomRef.current;
+    if (Math.abs(next - current) < 1e-9) return;
+
+    const track = trackRef.current;
+    let anchorX = anchorClientX;
+    if (anchorX === undefined) {
+      const scroll = scrollRef.current;
+      if (scroll && track) {
+        const scrollRect = scroll.getBoundingClientRect();
+        const trackRect = track.getBoundingClientRect();
+        const visibleLeft = Math.max(scrollRect.left, trackRect.left);
+        const visibleRight = Math.min(scrollRect.right, trackRect.right);
+        const span = spanSecRef.current;
+        const playheadX =
+          span > 0
+            ? trackRect.left + (currentTimeRef.current / span) * trackRect.width
+            : trackRect.left;
+        if (visibleRight > visibleLeft) {
+          anchorX =
+            playheadX >= visibleLeft && playheadX <= visibleRight
+              ? playheadX
+              : (visibleLeft + visibleRight) / 2;
+        } else {
+          anchorX = scrollRect.left + scrollRect.width / 2;
+        }
+      }
+    }
+
+    if (track && anchorX !== undefined) {
+      const rect = track.getBoundingClientRect();
+      if (rect.width > 0) {
+        pendingZoomAnchor.current = {
+          clientX: anchorX,
+          ratio: clamp((anchorX - rect.left) / rect.width, 0, 1),
+        };
+      }
+    }
+
+    zoomRef.current = next;
+    setZoom(next);
+  }, []);
+
+  useLayoutEffect(() => {
+    const pending = pendingZoomAnchor.current;
+    if (!pending) return;
+    pendingZoomAnchor.current = null;
+    const scroll = scrollRef.current;
+    const track = trackRef.current;
+    if (!scroll || !track) return;
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const delta = rect.left + pending.ratio * rect.width - pending.clientX;
+    if (Math.abs(delta) > 0.5) {
+      scroll.scrollLeft += delta;
+    }
+  }, [zoom]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
-        event.stopPropagation();
-        const delta = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-        setZoom((current) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta)));
+        if (event.deltaY === 0) return;
+        applyZoom(
+          zoomRef.current + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP),
+          event.clientX,
+        );
         return;
       }
-      event.preventDefault();
-      event.stopPropagation();
-      const delta = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-      setZoom((current) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta)));
-    },
-    [],
-  );
 
-  const handleZoomIn = useCallback(() => {
-    setZoom((current) => Math.min(ZOOM_MAX, current + ZOOM_STEP));
-  }, []);
+      if (event.shiftKey && !event.altKey) {
+        const delta = event.deltaY || event.deltaX;
+        if (delta !== 0) {
+          event.preventDefault();
+          node.scrollLeft += delta;
+        }
+      }
+    };
 
-  const handleZoomOut = useCallback(() => {
-    setZoom((current) => Math.max(ZOOM_MIN, current - ZOOM_STEP));
-  }, []);
-
-  const handleZoomReset = useCallback(() => {
-    setZoom(1);
-  }, []);
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [applyZoom]);
 
   const describeLine = (line: VocalLine): string => {
     const names = line.memberIds
@@ -312,37 +475,6 @@ export function DistributionChart({
             {song.lines.length} {song.lines.length === 1 ? 'PART' : 'PARTS'} ·{' '}
             {formatClock(spanSec)}
           </span>
-          <div className="dist-zoom">
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              onClick={handleZoomOut}
-              title="Zoom out"
-              aria-label="Zoom out"
-              disabled={zoom <= ZOOM_MIN}
-            >
-              −
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              onClick={handleZoomReset}
-              title="Reset zoom"
-              aria-label="Reset zoom"
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              onClick={handleZoomIn}
-              title="Zoom in"
-              aria-label="Zoom in"
-              disabled={zoom >= ZOOM_MAX}
-            >
-              +
-            </button>
-          </div>
           <label className="dist-sort">
             <span className="sr-only">Sort members</span>
             <select
@@ -421,15 +553,66 @@ export function DistributionChart({
         )}
       </div>
 
+      <div className="dist-zoom-bar" role="group" aria-label="Timeline zoom">
+        <div className="dist-zoom-readout">
+          <span className="dist-zoom-label mono">Timeline zoom</span>
+          <button
+            type="button"
+            className="dist-zoom-value mono"
+            onClick={() => applyZoom(1)}
+            title="Reset zoom to 100%"
+            aria-label={`Reset zoom to 100% (currently ${Math.round(zoom * 100)}%)`}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+        </div>
+        <span className="dist-zoom-hint mono" aria-hidden="true">
+          Ctrl / ⌘ + wheel to zoom · Shift + wheel to scroll
+        </span>
+        <div className="dist-zoom-controls">
+          <button
+            type="button"
+            className="dist-zoom-step"
+            onClick={() => applyZoom(zoomRef.current - ZOOM_STEP)}
+            title="Zoom out"
+            aria-label="Zoom out"
+            disabled={zoom <= ZOOM_MIN + 1e-9}
+          >
+            −
+          </button>
+          <input
+            type="range"
+            className="dist-zoom-slider"
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
+            step={ZOOM_STEP}
+            value={zoom}
+            aria-label="Timeline zoom"
+            aria-valuetext={`${Math.round(zoom * 100)} percent`}
+            onChange={(event) => applyZoom(Number(event.target.value))}
+          />
+          <button
+            type="button"
+            className="dist-zoom-step"
+            onClick={() => applyZoom(zoomRef.current + ZOOM_STEP)}
+            title="Zoom in"
+            aria-label="Zoom in"
+            disabled={zoom >= ZOOM_MAX - 1e-9}
+          >
+            +
+          </button>
+        </div>
+      </div>
+
       <div
         className="dist-scroll"
-        onWheel={handleWheel}
-        style={{ touchAction: 'pan-x pinch-zoom', overscrollBehaviorX: 'contain', overscrollBehaviorY: 'contain' }}
+        ref={scrollRef}
+        style={{ touchAction: 'pan-x pan-y pinch-zoom', overscrollBehaviorX: 'contain' }}
       >
-        <div className="dist-chart" style={{ minWidth: `${760 * zoom}px` }}>
+        <div className="dist-chart" style={{ '--dist-zoom': zoom } as CSSProperties}>
           <div className="dist-axis" aria-hidden="true">
             <span className="dist-axis-label">Member</span>
-            <div className="dist-axis-track">
+            <div className="dist-axis-track" ref={trackRef}>
               {ticks.map((tick) => (
                 <span
                   key={tick}
@@ -443,7 +626,7 @@ export function DistributionChart({
               ))}
               <span
                 className="dist-axis-playhead"
-                style={{ left: `${playheadPercent}%` }}
+                style={{ left: `calc(${playheadPercent}% * min(1, var(--dist-zoom, 1)))` }}
               />
             </div>
             <span className="dist-axis-label is-right">Profile · share</span>
@@ -453,6 +636,7 @@ export function DistributionChart({
             const member = memberById.get(row.memberId);
             if (!member) return null;
             const isPlaying = activeMemberIds.has(row.memberId);
+            const isSoloMember = soloMemberId === row.memberId;
             const kindBreakdown = lineKindOptions
               .filter(({ kind }) => kind !== 'sung' && row.kindCounts[kind] > 0)
               .map(({ kind }) => formatKindCount(kind, row.kindCounts[kind]))
@@ -473,13 +657,26 @@ export function DistributionChart({
 
             return (
               <div
-                className={['dist-row', isPlaying ? 'is-playing' : '']
+                className={['dist-row', isPlaying ? 'is-playing' : '', isSoloMember ? 'is-solo' : '']
                   .filter(Boolean)
                   .join(' ')}
                 key={row.memberId}
                 style={{ '--member-color': member.color } as CSSProperties}
               >
-                <div className="dist-member">
+                <div
+                  className="dist-member"
+                  onClick={() => onToggleSolo?.(row.memberId)}
+                  role={onToggleSolo ? 'button' : undefined}
+                  tabIndex={onToggleSolo ? 0 : undefined}
+                  onKeyDown={(event) => {
+                    if (!onToggleSolo) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onToggleSolo(row.memberId);
+                    }
+                  }}
+                  title={onToggleSolo ? `Play only ${member.name || 'this member'}'s parts` : undefined}
+                >
                   <Avatar
                     name={member.name}
                     face={member.face}
@@ -526,6 +723,7 @@ export function DistributionChart({
                     {row.segments.map((segment) => {
                       const line = segment.line;
                       const selected = line.id === selectedLineId;
+                      const showHandles = selected || hoveredLineId === line.id;
                       const playing = activeLineIds.has(line.id);
                       const kindMeta = lineKindMeta[line.kind];
                       const dragged = dragging?.lineId === line.id ? dragging : null;
@@ -550,15 +748,17 @@ export function DistributionChart({
                         '--member-color': member.color,
                       } as CSSProperties;
                       return (
-                        <>
+                        <Fragment key={`${line.id}-${row.memberId}`}>
                           <button
-                            key={`${line.id}-${row.memberId}`}
                             type="button"
                             className={[
                               'dist-segment',
                               kindMeta.className,
                               selected ? 'is-selected' : '',
                               playing ? 'is-playing' : '',
+                              soloMemberId !== null && !line.memberIds.includes(soloMemberId)
+                                ? 'is-dimmed'
+                                : '',
                               adjacentLeft ? 'is-adjacent-left' : '',
                               adjacentRight ? 'is-adjacent-right' : '',
                               dragged ? 'is-dragging' : '',
@@ -597,30 +797,48 @@ export function DistributionChart({
                               }
                             }}
                           >
-                            <span
-                              className="dist-segment-handle dist-segment-handle--start"
-                              aria-label="Resize start"
-                              onMouseDown={(event) => beginDrag(event, row, line, 'start')}
-                              onClick={(event) => event.stopPropagation()}
-                            />
-                            <span
-                              className="dist-segment-handle dist-segment-handle--end"
-                              aria-label="Resize end"
-                              onMouseDown={(event) => beginDrag(event, row, line, 'end')}
-                              onClick={(event) => event.stopPropagation()}
-                            />
+                            {showHandles ? (
+                              <>
+                                <span
+                                  className="dist-segment-handle dist-segment-handle--start"
+                                  aria-hidden="true"
+                                  onMouseDown={(event) => beginDrag(event, row, line, 'start')}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (didDragRef.current) {
+                                      didDragRef.current = false;
+                                      return;
+                                    }
+                                    onSelectLine(line.id);
+                                  }}
+                                />
+                                <span
+                                  className="dist-segment-handle dist-segment-handle--end"
+                                  aria-hidden="true"
+                                  onMouseDown={(event) => beginDrag(event, row, line, 'end')}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (didDragRef.current) {
+                                      didDragRef.current = false;
+                                      return;
+                                    }
+                                    onSelectLine(line.id);
+                                  }}
+                                />
+                              </>
+                            ) : null}
                           </button>
                           {dragged?.snapTarget !== undefined && dragged?.snapTarget !== null && (dragged.mode === 'start' || dragged.mode === 'end') ? (
                             <span
                               className="dist-snap-guide"
                               style={{
-                                left: `${(dragged.snapTarget / spanSec) * 100}%`,
+                                left: `calc(${(dragged.snapTarget / spanSec) * 100}% * min(1, var(--dist-zoom, 1)))`,
                                 top: '0',
                                 bottom: '0',
                               }}
                             />
                           ) : null}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </div>
@@ -671,7 +889,7 @@ export function DistributionChart({
 
                   <span
                     className="dist-row-playhead"
-                    style={{ left: `${playheadPercent}%` }}
+                    style={{ left: `calc(${playheadPercent}% * min(1, var(--dist-zoom, 1)))` }}
                     aria-hidden="true"
                   />
                 </div>
@@ -699,3 +917,5 @@ export function DistributionChart({
     </section>
   );
 }
+
+

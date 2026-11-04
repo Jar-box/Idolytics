@@ -49,11 +49,28 @@ export function VideoPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [rate, setRate] = useState(1);
   const [duration, setDuration] = useState(0);
+  const [playing, setPlaying] = useState(false);
   const [videoError, setVideoError] = useState(false);
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.playbackRate = rate;
   }, [rate, videoRef, videoUrl]);
+
+  useEffect(() => {
+    setPlaying(false);
+  }, [videoUrl]);
+
+  useEffect(() => {
+    if (!playing || !videoUrl) return;
+    let rafId = 0;
+    const tick = () => {
+      const el = videoRef.current;
+      if (el) onTimeUpdate(el.currentTime);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [playing, videoUrl, videoRef, onTimeUpdate]);
 
   const nudge = (delta: number) => {
     const video = videoRef.current;
@@ -111,6 +128,13 @@ export function VideoPanel({
               playsInline
               onTimeUpdate={(event) => onTimeUpdate(event.currentTarget.currentTime)}
               onSeeked={(event) => onTimeUpdate(event.currentTarget.currentTime)}
+              onPlay={() => setPlaying(true)}
+              onPause={(event) => {
+                setPlaying(false);
+                // Capture the exact pause position instead of the last timeupdate tick.
+                onTimeUpdate(event.currentTarget.currentTime);
+              }}
+              onEnded={() => setPlaying(false)}
               onLoadedMetadata={(event) => {
                 const duration = event.currentTarget.duration;
                 setDuration(duration);

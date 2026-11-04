@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatClock, parseClock } from './time';
+import { formatClock, parseClock, roundTime } from './time';
 
 describe('formatClock', () => {
   it('formats minutes and seconds', () => {
@@ -10,6 +10,16 @@ describe('formatClock', () => {
     expect(formatClock(65.05, true)).toBe('01:05.050');
     expect(formatClock(0.001, true)).toBe('00:00.001');
     expect(formatClock(3665.999, true)).toBe('1:01:05.999');
+    expect(formatClock(59.9996, true)).toBe('01:00.000');
+  });
+});
+
+describe('roundTime', () => {
+  it('keeps millisecond precision instead of snapping to tenths', () => {
+    expect(roundTime(0.1004)).toBe(0.1);
+    expect(roundTime(0.1234)).toBe(0.123);
+    expect(roundTime(65.98765)).toBe(65.988);
+    expect(roundTime(65.9999)).toBe(66);
   });
 });
 

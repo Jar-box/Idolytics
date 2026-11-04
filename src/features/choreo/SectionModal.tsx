@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { Section } from '../../domain/schema';
 import { ClockInput } from '../../components/ClockInput';
 import { Modal } from '../../components/Modal';
-import { formatClock, roundTo } from '../../lib/time';
+import { formatClock, roundTime } from '../../lib/time';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 
 interface SectionModalProps {
@@ -49,7 +49,7 @@ export function SectionModal({
   }, [open, section, defaultLabel, defaultStart, defaultEnd]);
 
   const useVideoTime = (setter: (value: number) => void) => {
-    setter(roundTo(currentTime, 1));
+    setter(roundTime(currentTime));
   };
 
   const handleSubmit = (event: FormEvent) => {

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { Formation, Section } from '../../domain/schema';
 import { ClockInput } from '../../components/ClockInput';
 import { Modal } from '../../components/Modal';
-import { formatClock, roundTo } from '../../lib/time';
+import { formatClock, roundTime } from '../../lib/time';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 
 interface FormationTimesModalProps {
@@ -85,13 +85,13 @@ export function FormationTimesModal({
             label="Start"
             value={start}
             onChange={setStart}
-            onUseCurrentTime={hasVideo ? () => setStart(roundTo(currentTime, 1)) : undefined}
+            onUseCurrentTime={hasVideo ? () => setStart(roundTime(currentTime)) : undefined}
           />
           <ClockInput
             label="End"
             value={end}
             onChange={setEnd}
-            onUseCurrentTime={hasVideo ? () => setEnd(roundTo(currentTime, 1)) : undefined}
+            onUseCurrentTime={hasVideo ? () => setEnd(roundTime(currentTime)) : undefined}
           />
         </div>
         <p className="form-note">

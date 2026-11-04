@@ -9,7 +9,7 @@ import { Check, MicVocal } from 'lucide-react';
 import type { Group, LineKind, Song, VocalLine } from '../../domain/schema';
 import { Avatar } from '../../components/Avatar';
 import { ClockInput } from '../../components/ClockInput';
-import { roundTo } from '../../lib/time';
+import { roundTime } from '../../lib/time';
 import { useToastStore } from '../../store/toastStore';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { lineKindOptions } from './lineKindMeta';
@@ -29,13 +29,13 @@ interface LineCaptureFormProps {
 const MAX_TIME = 60 * 60 * 12;
 
 function draftStartAt(value: number, spanSec: number): number {
-  return roundTo(Math.max(0, Math.min(value, Math.max(0, spanSec - 0.1))), 1);
+  return roundTime(Math.max(0, Math.min(value, Math.max(0, spanSec - 0.1))));
 }
 
 function draftEndAt(start: number, spanSec: number): number {
   const end = Math.min(spanSec, start + 5);
-  if (end > start) return roundTo(end, 1);
-  return roundTo(Math.max(start + 0.1, Math.min(spanSec, start + 1)), 1);
+  if (end > start) return roundTime(end);
+  return roundTime(Math.max(start + 0.1, Math.min(spanSec, start + 1)));
 }
 
 export function LineCaptureForm({
@@ -63,7 +63,11 @@ export function LineCaptureForm({
   const [lyric, setLyric] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [conflict, setConflict] = useState<{ memberId: string; memberName: string } | null>(null);
+  const [conflict, setConflict] = useState<{
+    memberId: string;
+    memberName: string;
+    lineId: string | null;
+  } | null>(null);
   const nextStartRef = useRef<number | null>(null);
 const formRef = useRef<HTMLFormElement>(null);
 
@@ -158,7 +162,7 @@ const formRef = useRef<HTMLFormElement>(null);
         );
         if (hasOverlap) {
           const member = group.members.find((gm) => gm.id === m);
-          setConflict({ memberId: m, memberName: member?.name || 'This member' });
+          setConflict({ memberId: m, memberName: member?.name || 'This member', lineId: line?.id ?? null });
           setError(null);
           return;
         }
@@ -169,6 +173,7 @@ const formRef = useRef<HTMLFormElement>(null);
   };
 
   const doSave = () => {
+    const existingLineId = line?.id ?? conflict?.lineId ?? null;
     setConflict(null);
     const trimmedLyric = lyric.trim();
     const trimmedNote = note.trim();
@@ -180,15 +185,16 @@ const formRef = useRef<HTMLFormElement>(null);
       lyric: trimmedLyric || undefined,
       note: trimmedNote || undefined,
     };
-    if (line) {
-      const ok = updateLine(group.id, song.id, line.id, payload);
+    if (existingLineId) {
+      const ok = updateLine(group.id, song.id, existingLineId, payload);
       if (!ok) {
         setError('Could not save this part. Check the members and times.');
         return;
       }
-      nextStartRef.current = line.endSec;
+      nextStartRef.current = end;
       pushToast('Part updated.', 'success');
-      onSaved(line.id);
+      onSaved(existingLineId);
+      if (line) onCancelEdit();
       return;
     }
     const id = addLine(group.id, song.id, payload);
@@ -203,6 +209,8 @@ const formRef = useRef<HTMLFormElement>(null);
 
   const doMerge = () => {
     if (!conflict) return;
+    const targetLineId = conflict.lineId ?? line?.id ?? null;
+    const conflictMemberId = conflict.memberId;
     setConflict(null);
     const trimmedLyric = lyric.trim();
     const trimmedNote = note.trim();
@@ -214,14 +222,14 @@ const formRef = useRef<HTMLFormElement>(null);
       lyric: trimmedLyric || undefined,
       note: trimmedNote || undefined,
     };
-    const ok = mergeLineIntoExisting(group.id, song.id, line?.id ?? null, payload, conflict.memberId);
+    const ok = mergeLineIntoExisting(group.id, song.id, targetLineId, payload, conflictMemberId);
     if (!ok) {
       setError('Could not merge this part. Check the members and times.');
       return;
     }
     pushToast('Merged into existing line.', 'success');
-    if (line) {
-      onSaved(line.id);
+    if (targetLineId) {
+      onSaved(targetLineId);
       onCancelEdit();
     } else {
       onSaved('');
@@ -270,14 +278,14 @@ const formRef = useRef<HTMLFormElement>(null);
             value={start}
             onChange={setStart}
             currentTimeLabel="audio"
-            onUseCurrentTime={() => setStart(roundTo(currentTime, 1))}
+            onUseCurrentTime={() => setStart(roundTime(currentTime))}
           />
           <ClockInput
             label="End"
             value={end}
             onChange={setEnd}
             currentTimeLabel="audio"
-            onUseCurrentTime={() => setEnd(roundTo(currentTime, 1))}
+            onUseCurrentTime={() => setEnd(roundTime(currentTime))}
           />
         </div>
 
