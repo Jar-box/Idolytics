@@ -6,10 +6,35 @@ import {
   type CSSProperties,
   type RefObject,
 } from 'react';
-import { Download, HardDrive, Link2, LoaderCircle, Music2, Pause, Play } from 'lucide-react';
+import {
+  Download,
+  HardDrive,
+  Link2,
+  LoaderCircle,
+  Music2,
+  Pause,
+  Play,
+  Volume1,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { MediaCopyNote } from '../../components/MediaCopyNote';
 import type { MediaCopyState, MediaSource } from '../../lib/mediaTypes';
 import { clamp, formatClock, roundTime } from '../../lib/time';
+
+const VOLUME_KEY = 'idolytics.audio.volume.v1';
+
+function readVolume(): number {
+  if (typeof window === 'undefined') return 1;
+  try {
+    const stored = window.localStorage.getItem(VOLUME_KEY);
+    if (stored === null) return 1;
+    const parsed = Number(stored);
+    return Number.isFinite(parsed) ? clamp(parsed, 0, 1) : 1;
+  } catch {
+    return 1;
+  }
+}
 
 interface AudioPanelProps {
   fileName: string | null;
@@ -47,14 +72,35 @@ export function AudioPanel({
   onImportUrl,
 }: AudioPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastAudibleVolume = useRef(1);
   const [rate, setRate] = useState(1);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [audioError, setAudioError] = useState(false);
+  const [volume, setVolume] = useState(readVolume);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = rate;
   }, [rate, audioRef, audioUrl]);
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+    try {
+      window.localStorage.setItem(VOLUME_KEY, String(volume));
+    } catch {
+      // Ignore storage failures (private mode, quota, etc.).
+    }
+  }, [volume, audioRef, audioUrl]);
+
+  const updateVolume = (next: number) => {
+    const clamped = clamp(next, 0, 1);
+    if (clamped > 0) lastAudibleVolume.current = clamped;
+    setVolume(clamped);
+  };
+
+  const toggleMute = () => {
+    updateVolume(volume > 0 ? 0 : lastAudibleVolume.current || 1);
+  };
 
   useEffect(() => {
     setDuration(0);
@@ -274,6 +320,41 @@ export function AudioPanel({
                   ))}
                 </select>
               </label>
+              <div className="audio-volume">
+                <button
+                  type="button"
+                  className="audio-volume-toggle"
+                  onClick={toggleMute}
+                  title={volume > 0 ? 'Mute song audio' : 'Unmute song audio'}
+                  aria-label={volume > 0 ? 'Mute song audio' : 'Unmute song audio'}
+                  aria-pressed={volume === 0}
+                >
+                  {volume === 0 ? (
+                    <VolumeX size={15} />
+                  ) : volume < 0.5 ? (
+                    <Volume1 size={15} />
+                  ) : (
+                    <Volume2 size={15} />
+                  )}
+                </button>
+                <input
+                  className="audio-volume-range"
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(volume * 100)}
+                  onChange={(event) => updateVolume(Number(event.target.value) / 100)}
+                  style={
+                    { '--audio-volume': `${Math.round(volume * 100)}%` } as CSSProperties
+                  }
+                  aria-label="Song audio volume"
+                  aria-valuetext={`${Math.round(volume * 100)}%`}
+                />
+                <span className="audio-volume-readout" aria-hidden="true">
+                  {Math.round(volume * 100)}%
+                </span>
+              </div>
             </div>
 
             {lengthMismatch ? (
@@ -370,6 +451,7 @@ export function AudioPanel({
           const nextDuration = event.currentTarget.duration;
           if (Number.isFinite(nextDuration)) setDuration(nextDuration);
           event.currentTarget.playbackRate = rate;
+          event.currentTarget.volume = volume;
           if (!Number.isFinite(initialTime)) return;
           const max = Number.isFinite(nextDuration) ? nextDuration : initialTime;
           const target = clamp(initialTime, 0, max);

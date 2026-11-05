@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type MouseEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import type { Group, Song, VocalLine } from '../../domain/schema';
 import {
   lineDuration,
@@ -18,7 +19,7 @@ import {
 } from '../../domain/lineDistribution';
 import { Avatar } from '../../components/Avatar';
 import { clamp, formatClock, formatPercent, roundTo } from '../../lib/time';
-import { formatKindCount, lineKindMeta, lineKindOptions } from './lineKindMeta';
+import { formatKindCount, getLineKindMeta, lineKindOptions } from './lineKindMeta';
 
 const LANE_HEIGHT = 15;
 const LANE_GAP = 3;
@@ -123,9 +124,7 @@ export function DistributionChart({
   const [offScreenTop, setOffScreenTop] = useState<string[]>([]);
   const [offScreenBottom, setOffScreenBottom] = useState<string[]>([]);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const topIndicatorsRef = useRef<HTMLDivElement | null>(null);
-  const bottomIndicatorsRef = useRef<HTMLDivElement | null>(null);
-  const visibleRef = useRef<Set<string>>(new Set());
+  const indicatorBoxRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const zoomRef = useRef(zoom);
@@ -164,9 +163,13 @@ export function DistributionChart({
     () => new Set(activeLines.map((line) => line.id)),
     [activeLines],
   );
-  const activeMemberIds = useMemo(
-    () => new Set(activeLines.flatMap((line) => line.memberIds)),
+  const activeMemberKey = useMemo(
+    () => [...new Set(activeLines.flatMap((line) => line.memberIds))].sort().join('|'),
     [activeLines],
+  );
+  const activeMemberIds = useMemo(
+    () => new Set(activeMemberKey ? activeMemberKey.split('|') : []),
+    [activeMemberKey],
   );
   const playingLine = useMemo(
     () =>
@@ -182,59 +185,103 @@ export function DistributionChart({
   );
   const ticks = useMemo(() => buildTicks(spanSec), [spanSec]);
 
+  const getViewportBounds = useCallback(() => {
+    const panel = scrollRef.current?.closest('.dist-panel');
+    const zoomBar = panel?.querySelector<HTMLElement>('.dist-zoom-bar');
+    const header = document.querySelector('.app-header');
+    const headerBottom = header ? header.getBoundingClientRect().bottom : 0;
+    const zoomBarRect = zoomBar?.getBoundingClientRect();
+    // Only reserve space for the zoom bar while it is actually stuck under the
+    // app header; otherwise it sits lower in the panel and overlaps nothing.
+    const zoomBarStuck =
+      zoomBarRect !== undefined && zoomBarRect.top <= headerBottom + 1;
+    const top = Math.max(0, zoomBarStuck && zoomBarRect ? zoomBarRect.bottom : headerBottom);
+    const audioPlayer = document.querySelector('.audio-player-bottom');
+    const bottom = Math.min(
+      window.innerHeight,
+      audioPlayer ? audioPlayer.getBoundingClientRect().top : window.innerHeight,
+    );
+    return { top, bottom };
+  }, []);
+
+  const scrollToMemberRow = useCallback(
+    (memberId: string) => {
+      const el = rowRefs.current.get(memberId);
+      if (!el) return;
+      const { top, bottom } = getViewportBounds();
+      const rect = el.getBoundingClientRect();
+      const available = Math.max(0, bottom - top);
+      const targetViewportTop = top + Math.max(12, (available - rect.height) / 2);
+      const maxScroll = Math.max(
+        0,
+        document.documentElement.scrollHeight - window.innerHeight,
+      );
+      const nextScroll = Math.min(
+        maxScroll,
+        Math.max(0, window.scrollY + rect.top - targetViewportTop),
+      );
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      window.scrollTo({ top: nextScroll, behavior: reduceMotion ? 'auto' : 'smooth' });
+    },
+    [getViewportBounds],
+  );
+
   const recomputeOffScreen = useCallback(() => {
     const root = scrollRef.current;
     if (!root) return;
-    const rootRect = root.getBoundingClientRect();
+    const panel = root.closest('.dist-panel');
+    const { top: topBoundary, bottom: bottomBoundary } = getViewportBounds();
+    const panelRect = panel?.getBoundingClientRect();
+    const chartInView = panelRect
+      ? panelRect.bottom > topBoundary && panelRect.top < bottomBoundary
+      : true;
+
     const nextTop: string[] = [];
     const nextBottom: string[] = [];
-    for (const memberId of activeMemberIds) {
-      if (visibleRef.current.has(memberId)) continue;
-      const el = rowRefs.current.get(memberId);
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.bottom <= rootRect.top + 2) nextTop.push(memberId);
-      else if (rect.top >= rootRect.bottom - 2) nextBottom.push(memberId);
-      else if (rect.top < rootRect.top) nextTop.push(memberId);
-      else nextBottom.push(memberId);
+    let indicatorLeft: number | null = null;
+
+    if (chartInView) {
+      for (const row of sortedRows) {
+        if (!activeMemberIds.has(row.memberId)) continue;
+        const el = rowRefs.current.get(row.memberId);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom <= topBoundary + 1) nextTop.push(row.memberId);
+        else if (rect.top >= bottomBoundary - 1) nextBottom.push(row.memberId);
+        if (indicatorLeft === null && (nextTop.length > 0 || nextBottom.length > 0)) {
+          const memberEl = el.querySelector<HTMLElement>('.dist-member');
+          indicatorLeft = memberEl ? memberEl.getBoundingClientRect().left : rect.left;
+        }
+      }
     }
+
     setOffScreenTop((prev) =>
       prev.length === nextTop.length && prev.every((id, i) => id === nextTop[i]) ? prev : nextTop,
     );
     setOffScreenBottom((prev) =>
       prev.length === nextBottom.length && prev.every((id, i) => id === nextBottom[i]) ? prev : nextBottom,
     );
-    const topEl = topIndicatorsRef.current;
-    const bottomEl = bottomIndicatorsRef.current;
-    if (topEl) topEl.style.top = ${root.scrollTop + 8}px;
-    if (bottomEl) bottomEl.style.top = ${root.scrollTop + root.clientHeight - 32}px;
-  }, [activeMemberIds]);
+
+    const box = indicatorBoxRef.current;
+    if (box) {
+      box.style.top = `${Math.round(topBoundary + 6)}px`;
+      box.style.bottom = `${Math.round(window.innerHeight - bottomBoundary + 6)}px`;
+      box.style.left = `${Math.round(indicatorLeft ?? root.getBoundingClientRect().left)}px`;
+    }
+  }, [activeMemberIds, getViewportBounds, sortedRows]);
 
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const id = entry.target.getAttribute('data-member-id');
-          if (!id) continue;
-          if (entry.isIntersecting) visibleRef.current.add(id);
-          else visibleRef.current.delete(id);
-        }
-        recomputeOffScreen();
-      },
-      { root, threshold: 0 },
-    );
-    rowRefs.current.forEach((el) => observer.observe(el));
-    const onScroll = () => recomputeOffScreen();
-    root.addEventListener('scroll', onScroll, { passive: true });
-    const onResize = () => recomputeOffScreen();
-    window.addEventListener('resize', onResize);
     recomputeOffScreen();
+    const onScroll = () => recomputeOffScreen();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    root.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
     return () => {
-      observer.disconnect();
+      window.removeEventListener('scroll', onScroll);
       root.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onResize);
+      window.removeEventListener('resize', onScroll);
     };
   }, [sortedRows, recomputeOffScreen]);
 
@@ -356,7 +403,7 @@ export function DistributionChart({
   const playheadPercent = spanSec > 0 ? clamp(currentTime / spanSec, 0, 1) * 100 : 0;
   const inspectedLineId = hoveredLineId ?? selectedLineId ?? playingLine?.id ?? null;
   const activeLine = inspectedLineId ? lineById.get(inspectedLineId) ?? null : null;
-  const activeLineMeta = activeLine ? lineKindMeta[activeLine.kind] : null;
+  const activeLineMeta = activeLine ? getLineKindMeta(activeLine.kind) : null;
 
   const handleTrackClick = (event: MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -456,15 +503,70 @@ export function DistributionChart({
     const names = line.memberIds
       .map((memberId) => memberById.get(memberId)?.name || 'Unknown member')
       .join(', ');
-    const base = `${lineKindMeta[line.kind].label} from ${formatClock(
+    const base = `${getLineKindMeta(line.kind).label} from ${formatClock(
       line.startSec,
       true,
     )} to ${formatClock(line.endSec, true)}. ${names}.`;
     return line.lyric ? `${base} ${line.lyric}` : base;
   };
 
+  const offScreenIndicators = createPortal(
+    <div ref={indicatorBoxRef} className="dist-offscreen-indicators">
+      <div className="dist-offscreen-indicators__group dist-offscreen-indicators__group--top">
+        {offScreenTop.map((memberId) => {
+          const member = memberById.get(memberId);
+          if (!member) return null;
+          return (
+            <button
+              type="button"
+              key={memberId}
+              className="dist-offscreen-avatar"
+              style={{ '--member-color': member.color } as CSSProperties}
+              title={`Scroll to ${member.name || 'Unnamed member'}'s row`}
+              aria-label={`Scroll to ${member.name || 'Unnamed member'}'s row`}
+              onClick={() => scrollToMemberRow(memberId)}
+            >
+              <Avatar
+                name={member.name}
+                face={member.face}
+                color={member.color}
+                size={24}
+              />
+            </button>
+          );
+        })}
+      </div>
+      <div className="dist-offscreen-indicators__group dist-offscreen-indicators__group--bottom">
+        {offScreenBottom.map((memberId) => {
+          const member = memberById.get(memberId);
+          if (!member) return null;
+          return (
+            <button
+              type="button"
+              key={memberId}
+              className="dist-offscreen-avatar"
+              style={{ '--member-color': member.color } as CSSProperties}
+              title={`Scroll to ${member.name || 'Unnamed member'}'s row`}
+              aria-label={`Scroll to ${member.name || 'Unnamed member'}'s row`}
+              onClick={() => scrollToMemberRow(memberId)}
+            >
+              <Avatar
+                name={member.name}
+                face={member.face}
+                color={member.color}
+                size={24}
+              />
+            </button>
+          );
+        })}
+      </div>
+    </div>,
+    document.body,
+  );
+
   return (
     <section className="panel dist-panel">
+      {offScreenIndicators}
       <header className="panel-header dist-header">
         <div>
           <p className="eyebrow">Per member · whole song</p>
@@ -491,9 +593,13 @@ export function DistributionChart({
       </header>
 
       <div className="dist-legend">
-        {lineKindOptions.map(({ kind, label, className }) => (
+        {lineKindOptions.map(({ kind, label, color }) => (
           <span key={kind} className="dist-legend-item">
-            <span className={`dist-legend-swatch ${className}`} aria-hidden="true" />
+            <span
+              className="dist-legend-swatch dist-legend-swatch--kind"
+              style={{ '--kind-color': color } as CSSProperties}
+              aria-hidden="true"
+            />
             {label}
             <span className="dist-legend-count mono">{kindCounts[kind]}</span>
           </span>
@@ -657,6 +763,10 @@ export function DistributionChart({
 
             return (
               <div
+                ref={(el) => {
+                  if (el) rowRefs.current.set(row.memberId, el);
+                  else rowRefs.current.delete(row.memberId);
+                }}
                 className={['dist-row', isPlaying ? 'is-playing' : '', isSoloMember ? 'is-solo' : '']
                   .filter(Boolean)
                   .join(' ')}
@@ -725,7 +835,7 @@ export function DistributionChart({
                       const selected = line.id === selectedLineId;
                       const showHandles = selected || hoveredLineId === line.id;
                       const playing = activeLineIds.has(line.id);
-                      const kindMeta = lineKindMeta[line.kind];
+                      const kindMeta = getLineKindMeta(line.kind);
                       const dragged = dragging?.lineId === line.id ? dragging : null;
                       const renderStart = dragged ? dragged.startSec : line.startSec;
                       const renderEnd = dragged ? dragged.endSec : line.endSec;
@@ -746,6 +856,7 @@ export function DistributionChart({
                         top: `${segment.lane * (LANE_HEIGHT + LANE_GAP)}px`,
                         height: `${LANE_HEIGHT}px`,
                         '--member-color': member.color,
+'--kind-color': kindMeta.marked ? kindMeta.color : 'transparent',
                       } as CSSProperties;
                       return (
                         <Fragment key={`${line.id}-${row.memberId}`}>
@@ -797,7 +908,12 @@ export function DistributionChart({
                               }
                             }}
                           >
-                            {showHandles ? (
+                            {kindMeta.marked ? (
+                               <span className="dist-segment-kind" style={{ '--kind-color': kindMeta.color } as CSSProperties} aria-hidden="true">
+                                 <kindMeta.icon size={9} strokeWidth={2.4} />
+                               </span>
+                             ) : null}
+{showHandles ? (
                               <>
                                 <span
                                   className="dist-segment-handle dist-segment-handle--start"
